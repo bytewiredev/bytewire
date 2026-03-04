@@ -97,10 +97,15 @@ func Section(opts ...Option) *Node { return element("section", opts...) }
 func Article(opts ...Option) *Node { return element("article", opts...) }
 func Img(opts ...Option) *Node    { return element("img", opts...) }
 func Label(opts ...Option) *Node  { return element("label", opts...) }
-func Table(opts ...Option) *Node  { return element("table", opts...) }
-func Tr(opts ...Option) *Node     { return element("tr", opts...) }
-func Td(opts ...Option) *Node     { return element("td", opts...) }
-func Th(opts ...Option) *Node     { return element("th", opts...) }
+func Table(opts ...Option) *Node    { return element("table", opts...) }
+func Thead(opts ...Option) *Node    { return element("thead", opts...) }
+func Tbody(opts ...Option) *Node    { return element("tbody", opts...) }
+func Tr(opts ...Option) *Node       { return element("tr", opts...) }
+func Td(opts ...Option) *Node       { return element("td", opts...) }
+func Th(opts ...Option) *Node       { return element("th", opts...) }
+func Textarea(opts ...Option) *Node { return element("textarea", opts...) }
+func SelectEl(opts ...Option) *Node { return element("select", opts...) }
+func OptionEl(opts ...Option) *Node { return element("option", opts...) }
 
 // Text creates a text node.
 func Text(content string) *Node {

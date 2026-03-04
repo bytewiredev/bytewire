@@ -20,11 +20,15 @@ var (
 	// intentWriter is the persistent WritableStreamDefaultWriter
 	// for sending client intents over a single bidi stream.
 	intentWriter js.Value
+
+	// overlay is the reconnection status overlay element.
+	overlay js.Value
 )
 
 func init() {
 	document = js.Global().Get("document")
 	nodes = make(map[uint32]js.Value)
+	overlay = js.Undefined()
 }
 
 // Start initializes the Bytewire WASM client: connects WebTransport,
@@ -39,17 +43,67 @@ func Start() {
 	root.Set("textContent", "Connecting…")
 	fmt.Println("bytewire: WASM client initialized")
 
+	// Expose window.__bytewire DevTools object
+	initDevTools()
+
+	if !connect() {
+		return
+	}
+
+	// Listen for browser back/forward navigation
+	js.Global().Get("window").Call("addEventListener", "popstate", js.FuncOf(func(_ js.Value, _ []js.Value) any {
+		path := js.Global().Get("location").Get("pathname").String()
+		sendClientNav(path)
+		return nil
+	}))
+
+	// Set up event delegation on #bw-root
+	setupEventDelegation()
+
+	fmt.Println("bytewire: event delegation active")
+
+	// Keep alive
+	select {}
+}
+
+// connect establishes the WebTransport connection and starts reading streams.
+// Returns true on success, false on fatal config errors.
+func connect() bool {
 	// Read config from window.__bw_config injected by the server.
 	config := js.Global().Get("__bw_config")
 	if config.IsUndefined() || config.IsNull() {
 		root.Set("textContent", "Error: __bw_config not set")
-		return
+		return false
 	}
 
 	wtURL := config.Get("url").String()
 	certHash := config.Get("certHash")
 
-	// Connect WebTransport
+	wt, err := dialWebTransport(wtURL, certHash)
+	if err != "" {
+		root.Set("textContent", "WebTransport failed: "+err)
+		fmt.Println("bytewire: WebTransport failed:", err)
+		return false
+	}
+
+	fmt.Println("bytewire: WebTransport connected")
+	root.Set("textContent", "")
+
+	if !openIntentStream(wt) {
+		root.Set("textContent", "Error: could not open intent stream")
+		return false
+	}
+
+	// Start reading server patches; on disconnect, trigger reconnect.
+	go readIncomingStreamsWithReconnect(wt)
+
+	return true
+}
+
+// dialWebTransport creates a WebTransport connection and awaits ready.
+// Returns the WebTransport object and empty string on success, or
+// js.Undefined() and an error string on failure.
+func dialWebTransport(wtURL string, certHash js.Value) (js.Value, string) {
 	wtOpts := js.Global().Get("Object").New()
 	hashObj := js.Global().Get("Object").New()
 	hashObj.Set("algorithm", "sha-256")
@@ -60,7 +114,6 @@ func Start() {
 
 	wt := js.Global().Get("WebTransport").New(wtURL, wtOpts)
 
-	// Await wt.ready
 	done := make(chan struct{})
 	var connectErr string
 
@@ -82,20 +135,11 @@ func Start() {
 	)
 
 	<-done
+	return wt, connectErr
+}
 
-	if connectErr != "" {
-		root.Set("textContent", "WebTransport failed: "+connectErr)
-		fmt.Println("bytewire: WebTransport failed:", connectErr)
-		return
-	}
-
-	fmt.Println("bytewire: WebTransport connected")
-	root.Set("textContent", "")
-
-	// Start reading server patches (unidirectional streams)
-	go readIncomingStreams(wt)
-
-	// Open one persistent bidi stream for client→server intents
+// openIntentStream opens the persistent bidi stream for client intents.
+func openIntentStream(wt js.Value) bool {
 	openDone := make(chan struct{})
 	wt.Call("createBidirectionalStream").Call("then",
 		js.FuncOf(func(_ js.Value, args []js.Value) any {
@@ -114,25 +158,125 @@ func Start() {
 	)
 	<-openDone
 
-	if intentWriter.IsUndefined() || intentWriter.IsNull() {
-		root.Set("textContent", "Error: could not open intent stream")
+	return !intentWriter.IsUndefined() && !intentWriter.IsNull()
+}
+
+// readIncomingStreamsWithReconnect reads streams and triggers reconnection on disconnect.
+func readIncomingStreamsWithReconnect(wt js.Value) {
+	// Wait for the WebTransport session to close.
+	closed := make(chan struct{})
+	wt.Get("closed").Call("then",
+		js.FuncOf(func(_ js.Value, _ []js.Value) any {
+			close(closed)
+			return nil
+		}),
+	).Call("catch",
+		js.FuncOf(func(_ js.Value, _ []js.Value) any {
+			close(closed)
+			return nil
+		}),
+	)
+
+	// Read streams normally while connected.
+	go readIncomingStreams(wt)
+
+	<-closed
+	fmt.Println("bytewire: connection lost, starting reconnect")
+	reconnect()
+}
+
+// reconnect attempts to re-establish the connection with exponential backoff.
+func reconnect() {
+	// Clear stale DOM state — server will re-mount the full tree.
+	clearNodeRegistry()
+	root.Set("textContent", "")
+	showOverlay("Reconnecting…")
+
+	config := js.Global().Get("__bw_config")
+	wtURL := config.Get("url").String()
+	certHash := config.Get("certHash")
+
+	delay := 1000 // milliseconds
+	maxDelay := 10000
+	maxTotalMs := 30000
+	elapsedMs := 0
+
+	for elapsedMs < maxTotalMs {
+		// Sleep using a JS setTimeout-based channel.
+		sleep(delay)
+		elapsedMs += delay
+
+		fmt.Printf("bytewire: reconnect attempt (elapsed %ds)\n", elapsedMs/1000)
+
+		wt, err := dialWebTransport(wtURL, certHash)
+		if err != "" {
+			fmt.Println("bytewire: reconnect failed:", err)
+			delay = min(delay*2, maxDelay)
+			continue
+		}
+
+		if !openIntentStream(wt) {
+			fmt.Println("bytewire: reconnect intent stream failed")
+			delay = min(delay*2, maxDelay)
+			continue
+		}
+
+		// Success
+		fmt.Println("bytewire: reconnected")
+		hideOverlay()
+		go readIncomingStreamsWithReconnect(wt)
 		return
 	}
 
-	// Listen for browser back/forward navigation
-	js.Global().Get("window").Call("addEventListener", "popstate", js.FuncOf(func(_ js.Value, _ []js.Value) any {
-		path := js.Global().Get("location").Get("pathname").String()
-		sendClientNav(path)
+	// Exhausted retries
+	showOverlay("Connection lost. Please reload the page.")
+	fmt.Println("bytewire: reconnect failed after 30s")
+}
+
+// clearNodeRegistry removes all entries from the nodes map.
+func clearNodeRegistry() {
+	for id := range nodes {
+		delete(nodes, id)
+	}
+}
+
+// showOverlay displays a full-screen reconnection status overlay.
+func showOverlay(msg string) {
+	if !overlay.IsUndefined() && !overlay.IsNull() {
+		overlay.Set("textContent", msg)
+		return
+	}
+	overlay = document.Call("createElement", "div")
+	overlay.Set("id", "bw-reconnect-overlay")
+	overlay.Get("style").Set("cssText",
+		"position:fixed;top:0;left:0;width:100%;height:100%;"+
+			"background:rgba(0,0,0,0.7);color:#fff;"+
+			"display:flex;align-items:center;justify-content:center;"+
+			"font-family:system-ui,sans-serif;font-size:1.25rem;z-index:99999")
+	overlay.Set("textContent", msg)
+	document.Get("body").Call("appendChild", overlay)
+}
+
+// hideOverlay removes the reconnection overlay from the DOM.
+func hideOverlay() {
+	if overlay.IsUndefined() || overlay.IsNull() {
+		return
+	}
+	parent := overlay.Get("parentNode")
+	if !parent.IsNull() && !parent.IsUndefined() {
+		parent.Call("removeChild", overlay)
+	}
+	overlay = js.Undefined()
+}
+
+// sleep blocks for the given number of milliseconds using setTimeout.
+func sleep(ms int) {
+	ch := make(chan struct{})
+	js.Global().Call("setTimeout", js.FuncOf(func(_ js.Value, _ []js.Value) any {
+		close(ch)
 		return nil
-	}))
-
-	// Set up event delegation on #bw-root
-	setupEventDelegation()
-
-	fmt.Println("bytewire: event delegation active")
-
-	// Keep alive
-	select {}
+	}), ms)
+	<-ch
 }
 
 // readIncomingStreams reads unidirectional streams from the server
@@ -149,7 +293,7 @@ func readIncomingStreams(wt js.Value) {
 					return nil
 				}
 				stream := result.Get("value")
-				go readStreamAndPatch(stream, reader, readNext)
+				go readStreamAndPatch(stream, readNext)
 				return nil
 			}),
 		).Call("catch",
@@ -165,7 +309,7 @@ func readIncomingStreams(wt js.Value) {
 }
 
 // readStreamAndPatch fully reads a unidirectional stream and applies the opcodes.
-func readStreamAndPatch(stream js.Value, reader js.Value, readNext js.Func) {
+func readStreamAndPatch(stream js.Value, readNext js.Func) {
 	sr := stream.Call("getReader")
 	var chunks []js.Value
 
@@ -304,26 +448,26 @@ func setupEventDelegation() {
 		return nil
 	}))
 
-	// SPA link interception: <a data-bw-link href="/path">
-	root.Call("addEventListener", "click", js.FuncOf(func(_ js.Value, args []js.Value) any {
+	// SPA link interception: any <a> with href starting with "/"
+	document.Call("addEventListener", "click", js.FuncOf(func(_ js.Value, args []js.Value) any {
 		e := args[0]
 		target := e.Get("target")
 
-		// Walk up to find nearest <a> with data-bw-link
+		// Walk up to find nearest <a> with a local href
 		body := document.Get("body")
 		el := target
 		for !el.IsNull() && !el.IsUndefined() && !el.Equal(body) {
 			tagName := el.Get("tagName")
 			if !tagName.IsUndefined() && tagName.String() == "A" {
-				linkAttr := el.Call("getAttribute", "data-bw-link")
-				if !linkAttr.IsNull() && !linkAttr.IsUndefined() {
-					href := el.Call("getAttribute", "href")
-					if !href.IsNull() && !href.IsUndefined() {
+				href := el.Call("getAttribute", "href")
+				if !href.IsNull() && !href.IsUndefined() {
+					h := href.String()
+					if len(h) > 0 && h[0] == '/' {
 						e.Call("preventDefault")
 						e.Call("stopPropagation")
-						sendClientNav(href.String())
+						sendClientNav(h)
+						return nil
 					}
-					return nil
 				}
 			}
 			el = el.Get("parentElement")

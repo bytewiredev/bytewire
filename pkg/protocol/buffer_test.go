@@ -373,6 +373,75 @@ func BenchmarkEncodeBatch(b *testing.B) {
 	}
 }
 
+func TestEncodeDecodeError(t *testing.T) {
+	buf := AcquireBuffer()
+	defer buf.Release()
+
+	buf.EncodeError("panic in event handler: runtime error: index out of range")
+	msg, n, err := DecodeFrame(buf.Bytes())
+	if err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if n != buf.Len() {
+		t.Fatalf("expected %d bytes consumed, got %d", buf.Len(), n)
+	}
+	if msg.Op != OpError {
+		t.Fatalf("expected OpError, got 0x%02x", msg.Op)
+	}
+	if msg.Text != "panic in event handler: runtime error: index out of range" {
+		t.Fatalf("expected error message, got %q", msg.Text)
+	}
+}
+
+func TestEncodeDecodeErrorEmpty(t *testing.T) {
+	buf := AcquireBuffer()
+	defer buf.Release()
+
+	buf.EncodeError("")
+	msg, _, err := DecodeFrame(buf.Bytes())
+	if err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if msg.Op != OpError || msg.Text != "" {
+		t.Fatalf("unexpected: op=0x%02x text=%q", msg.Op, msg.Text)
+	}
+}
+
+func TestEncodeDecodeDevToolsState(t *testing.T) {
+	buf := AcquireBuffer()
+	defer buf.Release()
+
+	jsonData := []byte(`{"sessionID":1,"currentPath":"/home","nodeCount":42}`)
+	buf.EncodeDevToolsState(jsonData)
+	msg, n, err := DecodeFrame(buf.Bytes())
+	if err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if n != buf.Len() {
+		t.Fatalf("expected %d bytes consumed, got %d", buf.Len(), n)
+	}
+	if msg.Op != OpDevToolsState {
+		t.Fatalf("expected OpDevToolsState, got 0x%02x", msg.Op)
+	}
+	if string(msg.Payload) != string(jsonData) {
+		t.Fatalf("expected payload %q, got %q", string(jsonData), string(msg.Payload))
+	}
+}
+
+func TestEncodeDecodeDevToolsStateEmpty(t *testing.T) {
+	buf := AcquireBuffer()
+	defer buf.Release()
+
+	buf.EncodeDevToolsState([]byte{})
+	msg, _, err := DecodeFrame(buf.Bytes())
+	if err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if msg.Op != OpDevToolsState || len(msg.Payload) != 0 {
+		t.Fatalf("unexpected: op=0x%02x payload=%q", msg.Op, string(msg.Payload))
+	}
+}
+
 func BenchmarkEncodeReplaceText(b *testing.B) {
 	buf := AcquireBuffer()
 	defer buf.Release()

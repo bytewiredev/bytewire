@@ -174,6 +174,28 @@ func Decode(data []byte) (Message, int, error) {
 		msg.Children = children
 		return msg, len(data), nil
 
+	case OpError:
+		if len(data) < 3 {
+			return msg, 0, ErrShortRead
+		}
+		msgLen := int(binary.BigEndian.Uint16(data[1:3]))
+		if len(data) < 3+msgLen {
+			return msg, 0, ErrShortRead
+		}
+		msg.Text = string(data[3 : 3+msgLen])
+		return msg, 3 + msgLen, nil
+
+	case OpDevToolsState:
+		if len(data) < 5 {
+			return msg, 0, ErrShortRead
+		}
+		jsonLen := int(binary.BigEndian.Uint32(data[1:5]))
+		if len(data) < 5+jsonLen {
+			return msg, 0, ErrShortRead
+		}
+		msg.Payload = data[5 : 5+jsonLen]
+		return msg, 5 + jsonLen, nil
+
 	case OpClientIntent:
 		if len(data) < 6 {
 			return msg, 0, ErrShortRead

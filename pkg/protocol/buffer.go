@@ -208,6 +208,27 @@ func (b *Buffer) EncodeBatch(fn func(inner *Buffer)) {
 	b.endFrame(off)
 }
 
+// EncodeError writes an OpError instruction.
+// Format: [0x0A][2B message length][UTF-8 message bytes]
+func (b *Buffer) EncodeError(message string) {
+	off := b.beginFrame()
+	b.writeByte(OpError)
+	msgBytes := []byte(message)
+	b.buf = binary.BigEndian.AppendUint16(b.buf, uint16(len(msgBytes)))
+	b.writeBytes(msgBytes)
+	b.endFrame(off)
+}
+
+// EncodeDevToolsState writes an OpDevToolsState instruction.
+// Format: [0x0B][4B JSON length][JSON bytes]
+func (b *Buffer) EncodeDevToolsState(jsonData []byte) {
+	off := b.beginFrame()
+	b.writeByte(OpDevToolsState)
+	b.writeUint32(uint32(len(jsonData)))
+	b.writeBytes(jsonData)
+	b.endFrame(off)
+}
+
 // countFrames counts the number of length-prefixed frames in data.
 func countFrames(data []byte) uint32 {
 	var n uint32
