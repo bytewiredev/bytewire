@@ -283,6 +283,9 @@ func applyFrame(data []byte) {
 		// the nested length-prefixed frames.
 		applyOpcodes(data[p+4:])
 
+	case 0x00: // OpHello
+		handleHello(data)
+
 	default:
 		fmt.Printf("bytewire: unknown opcode 0x%02x\n", op)
 	}

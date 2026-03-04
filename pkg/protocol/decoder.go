@@ -15,6 +15,8 @@ var (
 // Message is a decoded Bytewire binary instruction.
 type Message struct {
 	Op        byte
+	Major     byte     // OpHello, OpClientHello
+	Minor     byte     // OpHello, OpClientHello
 	NodeID    uint32
 	ParentID  uint32   // OpInsertNode
 	SiblingID uint32   // OpInsertNode
@@ -208,6 +210,22 @@ func Decode(data []byte) (Message, int, error) {
 	case OpClientNav:
 		msg.Text = string(data[1:])
 		return msg, len(data), nil
+
+	case OpHello:
+		if len(data) < 3 {
+			return msg, 0, ErrShortRead
+		}
+		msg.Major = data[1]
+		msg.Minor = data[2]
+		return msg, 3, nil
+
+	case OpClientHello:
+		if len(data) < 3 {
+			return msg, 0, ErrShortRead
+		}
+		msg.Major = data[1]
+		msg.Minor = data[2]
+		return msg, 3, nil
 
 	default:
 		return msg, 0, fmt.Errorf("%w: 0x%02x", ErrUnknownOp, msg.Op)

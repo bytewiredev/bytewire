@@ -429,6 +429,17 @@ func (s *Server) handleWebSocket(conn *websocket.Conn) {
 	}
 	s.logger.Info("WebSocket session connected", "sessionID", sess.ID)
 
+	// Send protocol version handshake.
+	helloBuf := protocol.AcquireBuffer()
+	helloBuf.EncodeHello(protocol.ProtocolMajor, protocol.ProtocolMinor)
+	if err := w.WriteMessage(helloBuf.Bytes()); err != nil {
+		helloBuf.Release()
+		s.logger.Error("failed to send hello", "error", err)
+		conn.Close()
+		return
+	}
+	helloBuf.Release()
+
 	if err := sess.Mount(s.component); err != nil {
 		s.logger.Error("mount failed", "error", err)
 		sess.Close()
