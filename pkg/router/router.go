@@ -69,7 +69,8 @@ func (r *Router) Mount(s *engine.Session) *dom.Node {
 
 // navigate handles a client navigation event.
 func (r *Router) navigate(path string) {
-	if path == r.currentPath {
+	cleanPath, _ := splitQuery(path)
+	if cleanPath == r.currentPath {
 		return
 	}
 	r.swapRoute(path)
@@ -77,10 +78,12 @@ func (r *Router) navigate(path string) {
 
 // renderPath renders the initial route without emitting remove ops.
 func (r *Router) renderPath(path string) {
-	comp, params := r.match(path)
-	r.currentPath = path
-	r.session.SetCurrentPath(path)
+	cleanPath, query := splitQuery(path)
+	comp, params := r.match(cleanPath)
+	r.currentPath = cleanPath
+	r.session.SetCurrentPath(cleanPath)
 	r.session.SetRouteParams(params)
+	r.session.SetRouteQuery(query)
 
 	if comp != nil {
 		child := comp(r.session)
@@ -91,10 +94,12 @@ func (r *Router) renderPath(path string) {
 
 // swapRoute removes the current child and renders the new route.
 func (r *Router) swapRoute(path string) {
-	comp, params := r.match(path)
-	r.currentPath = path
-	r.session.SetCurrentPath(path)
+	cleanPath, query := splitQuery(path)
+	comp, params := r.match(cleanPath)
+	r.currentPath = cleanPath
+	r.session.SetCurrentPath(cleanPath)
 	r.session.SetRouteParams(params)
+	r.session.SetRouteQuery(query)
 
 	// Remove old child
 	if r.currentChild != nil {
@@ -134,6 +139,31 @@ func (r *Router) match(path string) (engine.Component, map[string]string) {
 		return r.notFound, nil
 	}
 	return nil, nil
+}
+
+// splitQuery separates a path from its query string and parses query parameters.
+// "/search?q=hello&page=2" -> "/search", {"q":"hello","page":"2"}
+func splitQuery(path string) (string, map[string]string) {
+	idx := strings.IndexByte(path, '?')
+	if idx < 0 {
+		return path, nil
+	}
+	cleanPath := path[:idx]
+	raw := path[idx+1:]
+	if raw == "" {
+		return cleanPath, nil
+	}
+	query := make(map[string]string)
+	for _, pair := range strings.Split(raw, "&") {
+		if pair == "" {
+			continue
+		}
+		k, v, _ := strings.Cut(pair, "=")
+		if k != "" {
+			query[k] = v
+		}
+	}
+	return cleanPath, query
 }
 
 // splitPath splits a URL path into segments, filtering empty strings.

@@ -247,10 +247,7 @@ func applyFrame(data []byte) {
 		if node, ok := nodes[nodeID]; ok {
 			// Splice text at byte offsets. Assumes UTF-8 aligned offsets from server.
 			current := node.Get("textContent").String()
-			end := int(offset + length)
-			if end > len(current) {
-				end = len(current)
-			}
+			end := min(int(offset+length), len(current))
 			if int(offset) > len(current) {
 				return
 			}
@@ -261,6 +258,21 @@ func applyFrame(data []byte) {
 	case 0x08: // OpPushHistory
 		path := string(data[p:])
 		js.Global().Get("history").Call("pushState", nil, "", path)
+
+	case 0x0A: // OpError
+		if p+2 > len(data) {
+			return
+		}
+		msgLen := int(binary.BigEndian.Uint16(data[p : p+2]))
+		p += 2
+		if p+msgLen > len(data) {
+			return
+		}
+		errMsg := string(data[p : p+msgLen])
+		showErrorOverlay(errMsg)
+
+	case 0x0B: // OpDevToolsState
+		handleDevToolsState(data)
 
 	case 0x09: // OpBatch
 		if p+4 > len(data) {
@@ -274,6 +286,9 @@ func applyFrame(data []byte) {
 	default:
 		fmt.Printf("bytewire: unknown opcode 0x%02x\n", op)
 	}
+
+	// Update DevTools node count after any mutation
+	updateDevToolsNodeCount()
 }
 
 func findNull(data []byte) int {
@@ -283,6 +298,51 @@ func findNull(data []byte) int {
 		}
 	}
 	return -1
+}
+
+// showErrorOverlay renders a fixed-position red error banner at the top of the page.
+// It auto-dismisses after 10 seconds and includes a dismiss button.
+func showErrorOverlay(msg string) {
+	overlay := document.Call("createElement", "div")
+	overlay.Call("setAttribute", "style",
+		"position:fixed;top:0;left:0;right:0;z-index:99999;"+
+			"background:#dc2626;color:#fff;padding:12px 16px;"+
+			"font-family:monospace;font-size:14px;line-height:1.4;"+
+			"display:flex;align-items:flex-start;gap:12px;",
+	)
+
+	msgSpan := document.Call("createElement", "span")
+	msgSpan.Call("setAttribute", "style", "flex:1;white-space:pre-wrap;word-break:break-word;")
+	msgSpan.Set("textContent", msg)
+	overlay.Call("appendChild", msgSpan)
+
+	btn := document.Call("createElement", "button")
+	btn.Call("setAttribute", "style",
+		"background:none;border:none;color:#fff;font-size:20px;"+
+			"cursor:pointer;padding:0;line-height:1;flex-shrink:0;",
+	)
+	btn.Set("textContent", "\u00d7")
+
+	dismiss := js.FuncOf(func(this js.Value, args []js.Value) any {
+		parent := overlay.Get("parentNode")
+		if !parent.IsNull() && !parent.IsUndefined() {
+			parent.Call("removeChild", overlay)
+		}
+		return nil
+	})
+	btn.Call("addEventListener", "click", dismiss)
+	overlay.Call("appendChild", btn)
+
+	document.Get("body").Call("appendChild", overlay)
+
+	// Auto-dismiss after 10 seconds.
+	js.Global().Call("setTimeout", js.FuncOf(func(this js.Value, args []js.Value) any {
+		parent := overlay.Get("parentNode")
+		if !parent.IsNull() && !parent.IsUndefined() {
+			parent.Call("removeChild", overlay)
+		}
+		return nil
+	}), 10000)
 }
 
 // cleanupDescendants removes all descendant nodes from the nodes map.

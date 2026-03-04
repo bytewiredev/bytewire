@@ -83,9 +83,92 @@ const (
 	HFull   Class = "h-full"
 	WScreen Class = "w-screen"
 	HScreen Class = "h-screen"
+	W4      Class = "w-4"
+	H4      Class = "h-4"
+	W6      Class = "w-6"
+	H6      Class = "h-6"
+	W8      Class = "w-8"
+	H8      Class = "h-8"
 	MaxWLg  Class = "max-w-lg"
 	MaxWXl  Class = "max-w-xl"
 	MaxW2Xl Class = "max-w-2xl"
+	MinW0   Class = "min-w-0"
+)
+
+// Positioning
+const (
+	Fixed    Class = "fixed"
+	Absolute Class = "absolute"
+	Relative Class = "relative"
+	Inset0   Class = "inset-0"
+	Top0     Class = "top-0"
+	Right0   Class = "right-0"
+)
+
+// Z-Index
+const (
+	Z10 Class = "z-10"
+	Z50 Class = "z-50"
+)
+
+// Display & Overflow
+const (
+	Hidden   Class = "hidden"
+	Block    Class = "block"
+	Inline   Class = "inline-block"
+	Overflow Class = "overflow-auto"
+)
+
+// Cursor
+const (
+	CursorPointer Class = "cursor-pointer"
+)
+
+// Additional Colors
+const (
+	BgBlack       Class = "bg-black"
+	BgYellow500   Class = "bg-yellow-500"
+	BgYellow100   Class = "bg-yellow-100"
+	BgGreen100    Class = "bg-green-100"
+	BgRed100      Class = "bg-red-100"
+	BgBlue100     Class = "bg-blue-100"
+	BgOpacity50   Class = "bg-opacity-50"
+	TextYellow800 Class = "text-yellow-800"
+	TextGreen800  Class = "text-green-800"
+	TextRed800    Class = "text-red-800"
+	TextRed500    Class = "text-red-500"
+	TextGray500   Class = "text-gray-500"
+	TextGray600   Class = "text-gray-600"
+)
+
+// Additional Spacing
+const (
+	P0  Class = "p-0"
+	P3  Class = "p-3"
+	P6  Class = "p-6"
+	Px2 Class = "px-2"
+	Px3 Class = "px-3"
+	Py1 Class = "py-1"
+	Py3 Class = "py-3"
+	Mt2 Class = "mt-2"
+	Mb2 Class = "mb-2"
+	Mb4 Class = "mb-4"
+	Ml2 Class = "ml-2"
+	Mr2 Class = "mr-2"
+)
+
+// Additional Borders
+const (
+	BorderL4         Class = "border-l-4"
+	BorderGreen500   Class = "border-green-500"
+	BorderRed500     Class = "border-red-500"
+	BorderYellow500  Class = "border-yellow-500"
+	BorderBlue500    Class = "border-blue-500"
+)
+
+// Animation
+const (
+	AnimateSpin Class = "animate-spin"
 )
 
 // Classes joins multiple type-safe classes into a single string.

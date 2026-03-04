@@ -4,6 +4,8 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -32,6 +34,7 @@ type Session struct {
 	currentPath string
 	navHandler  func(path string)
 	routeParams map[string]string
+	routeQuery  map[string]string
 }
 
 // Writer abstracts the binary transport. The engine writes opcode frames here.
@@ -95,7 +98,12 @@ func (s *Session) HandleIntent(data []byte) error {
 }
 
 // handleClientIntent dispatches a user interaction event to the target node's handler.
-func (s *Session) handleClientIntent(msg protocol.Message) error {
+func (s *Session) handleClientIntent(msg protocol.Message) (retErr error) {
+	// DevTools state request: nodeID=0, eventType=0xFF
+	if msg.NodeID == 0 && msg.EventType == 0xFF {
+		return s.sendDevToolsState()
+	}
+
 	s.mu.Lock()
 	node := findNode(s.root, dom.NodeID(msg.NodeID))
 	s.mu.Unlock()
@@ -109,6 +117,18 @@ func (s *Session) handleClientIntent(msg protocol.Message) error {
 	if !ok {
 		return nil
 	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			errMsg := fmt.Sprintf("panic in event handler: %v", r)
+			s.logger.Error("handler panic recovered", "nodeID", msg.NodeID, "error", errMsg)
+
+			buf := protocol.AcquireBuffer()
+			defer buf.Release()
+			buf.EncodeError(errMsg)
+			retErr = s.writer.WriteMessage(buf.Bytes())
+		}
+	}()
 
 	handler(msg.Payload)
 
@@ -165,6 +185,73 @@ func (s *Session) RouteParam(key string) string {
 		return ""
 	}
 	return s.routeParams[key]
+}
+
+// SetRouteQuery stores the current route's parsed query parameters.
+func (s *Session) SetRouteQuery(query map[string]string) {
+	s.routeQuery = query
+}
+
+// RouteQuery returns a query parameter value by key.
+func (s *Session) RouteQuery(key string) string {
+	if s.routeQuery == nil {
+		return ""
+	}
+	return s.routeQuery[key]
+}
+
+// sendDevToolsState encodes and sends the current session state to the client.
+func (s *Session) sendDevToolsState() error {
+	snapshot := s.SnapshotState()
+	buf := protocol.AcquireBuffer()
+	defer buf.Release()
+	buf.EncodeDevToolsState(snapshot)
+	return s.writer.WriteMessage(buf.Bytes())
+}
+
+// SnapshotState returns a JSON blob describing the current session state
+// for DevTools inspection.
+func (s *Session) SnapshotState() []byte {
+	s.mu.Lock()
+	nodeCount := countNodes(s.root)
+	treeDepth := measureDepth(s.root)
+	s.mu.Unlock()
+
+	snapshot := map[string]any{
+		"sessionID":   uint64(s.ID),
+		"currentPath": s.currentPath,
+		"routeParams": s.routeParams,
+		"nodeCount":   nodeCount,
+		"treeDepth":   treeDepth,
+	}
+	data, _ := json.Marshal(snapshot)
+	return data
+}
+
+// countNodes returns the total number of nodes in the tree.
+func countNodes(n *dom.Node) int {
+	if n == nil {
+		return 0
+	}
+	count := 1
+	for _, child := range n.Children {
+		count += countNodes(child)
+	}
+	return count
+}
+
+// measureDepth returns the maximum depth of the tree.
+func measureDepth(n *dom.Node) int {
+	if n == nil {
+		return 0
+	}
+	maxChild := 0
+	for _, child := range n.Children {
+		if d := measureDepth(child); d > maxChild {
+			maxChild = d
+		}
+	}
+	return 1 + maxChild
 }
 
 // emitFullTree serializes the entire DOM tree as InsertNode + UpdateText opcodes.
