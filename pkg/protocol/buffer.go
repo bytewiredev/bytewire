@@ -178,3 +178,47 @@ func (b *Buffer) EncodeClientNav(path string) {
 	b.writeBytes([]byte(path))
 	b.endFrame(off)
 }
+
+// EncodeReplaceText writes an OpReplaceText instruction.
+// Format: [0x06][4B NodeID][4B Offset][4B Length][UTF-8 replacement]
+func (b *Buffer) EncodeReplaceText(nodeID, offset, length uint32, replacement string) {
+	off := b.beginFrame()
+	b.writeByte(OpReplaceText)
+	b.writeUint32(nodeID)
+	b.writeUint32(offset)
+	b.writeUint32(length)
+	b.writeBytes([]byte(replacement))
+	b.endFrame(off)
+}
+
+// EncodeBatch writes an OpBatch frame wrapping multiple opcodes.
+// The caller writes sub-frames into the inner buffer via fn.
+// Format: [0x09][4B count][...nested length-prefixed frames]
+func (b *Buffer) EncodeBatch(fn func(inner *Buffer)) {
+	inner := AcquireBuffer()
+	fn(inner)
+	innerBytes := inner.Bytes()
+	count := countFrames(innerBytes)
+	inner.Release()
+
+	off := b.beginFrame()
+	b.writeByte(OpBatch)
+	b.writeUint32(count)
+	b.writeBytes(innerBytes)
+	b.endFrame(off)
+}
+
+// countFrames counts the number of length-prefixed frames in data.
+func countFrames(data []byte) uint32 {
+	var n uint32
+	pos := 0
+	for pos < len(data) {
+		if pos+4 > len(data) {
+			break
+		}
+		frameLen := int(binary.BigEndian.Uint32(data[pos : pos+4]))
+		pos += 4 + frameLen
+		n++
+	}
+	return n
+}

@@ -88,7 +88,7 @@ func applyFrame(data []byte) {
 		p += 4
 		parentID := binary.BigEndian.Uint32(data[p : p+4])
 		p += 4
-		_ = binary.BigEndian.Uint32(data[p : p+4]) // siblingID (TODO)
+		siblingID := binary.BigEndian.Uint32(data[p : p+4])
 		p += 4
 
 		if p >= len(data) {
@@ -107,6 +107,44 @@ func applyFrame(data []byte) {
 		}
 		attrCount := int(binary.BigEndian.Uint16(data[p : p+2]))
 		p += 2
+
+		// Move semantics: if nodeID already exists, detach and reattach.
+		if existing, ok := nodes[nodeID]; ok {
+			oldParent := existing.Get("parentNode")
+			if !oldParent.IsNull() && !oldParent.IsUndefined() {
+				oldParent.Call("removeChild", existing)
+			}
+
+			// Skip attribute parsing for moves
+			for range attrCount {
+				if p+2 > len(data) {
+					return
+				}
+				kLen := int(binary.BigEndian.Uint16(data[p : p+2]))
+				p += 2
+				p += kLen
+				if p+2 > len(data) {
+					return
+				}
+				vLen := int(binary.BigEndian.Uint16(data[p : p+2]))
+				p += 2
+				p += vLen
+			}
+
+			// Reattach at new position
+			parent := root
+			if pp, ok := nodes[parentID]; ok {
+				parent = pp
+			}
+			if siblingID != 0 {
+				if sib, ok := nodes[siblingID]; ok {
+					parent.Call("insertBefore", existing, sib)
+					return
+				}
+			}
+			parent.Call("appendChild", existing)
+			return
+		}
 
 		var el js.Value
 		if tag == "#text" {
@@ -141,9 +179,20 @@ func applyFrame(data []byte) {
 			el.Call("setAttribute", k, v)
 		}
 
+		// Set data-cbs-id so cbs.js can map DOM events back to CBS node IDs.
+		if tag != "#text" {
+			el.Call("setAttribute", "data-cbs-id", fmt.Sprintf("%d", nodeID))
+		}
+
 		nodes[nodeID] = el
 
 		if parent, ok := nodes[parentID]; ok {
+			if siblingID != 0 {
+				if sib, ok := nodes[siblingID]; ok {
+					parent.Call("insertBefore", el, sib)
+					return
+				}
+			}
 			parent.Call("appendChild", el)
 		} else if parentID == 0 {
 			root.Call("appendChild", el)
@@ -156,8 +205,10 @@ func applyFrame(data []byte) {
 		nodeID := binary.BigEndian.Uint32(data[p : p+4])
 
 		if node, ok := nodes[nodeID]; ok {
+			// Recursively clean up descendant entries from the nodes map.
+			cleanupDescendants(node)
 			parent := node.Get("parentNode")
-			if !parent.IsNull() {
+			if !parent.IsNull() && !parent.IsUndefined() {
 				parent.Call("removeChild", node)
 			}
 			delete(nodes, nodeID)
@@ -181,9 +232,44 @@ func applyFrame(data []byte) {
 			node.Get("style").Call("setProperty", prop, val)
 		}
 
+	case 0x06: // OpReplaceText
+		if p+12 > len(data) {
+			return
+		}
+		nodeID := binary.BigEndian.Uint32(data[p : p+4])
+		p += 4
+		offset := binary.BigEndian.Uint32(data[p : p+4])
+		p += 4
+		length := binary.BigEndian.Uint32(data[p : p+4])
+		p += 4
+		replacement := string(data[p:])
+
+		if node, ok := nodes[nodeID]; ok {
+			// Splice text at byte offsets. Assumes UTF-8 aligned offsets from server.
+			current := node.Get("textContent").String()
+			end := int(offset + length)
+			if end > len(current) {
+				end = len(current)
+			}
+			if int(offset) > len(current) {
+				return
+			}
+			newText := current[:offset] + replacement + current[end:]
+			node.Set("textContent", newText)
+		}
+
 	case 0x08: // OpPushHistory
 		path := string(data[p:])
 		js.Global().Get("history").Call("pushState", nil, "", path)
+
+	case 0x09: // OpBatch
+		if p+4 > len(data) {
+			return
+		}
+		// Skip 4-byte count — applyOpcodes iterates by length prefix naturally.
+		// The outer frame already bounds data, so data[p+4:] contains exactly
+		// the nested length-prefixed frames.
+		applyOpcodes(data[p+4:])
 
 	default:
 		fmt.Printf("cbs: unknown opcode 0x%02x\n", op)
@@ -197,4 +283,31 @@ func findNull(data []byte) int {
 		}
 	}
 	return -1
+}
+
+// cleanupDescendants removes all descendant nodes from the nodes map.
+func cleanupDescendants(el js.Value) {
+	children := el.Get("children")
+	if children.IsUndefined() || children.IsNull() {
+		return
+	}
+	length := children.Get("length").Int()
+	for i := range length {
+		child := children.Index(i)
+		cleanupDescendants(child)
+		cbsID := child.Call("getAttribute", "data-cbs-id")
+		if !cbsID.IsNull() && !cbsID.IsUndefined() {
+			idStr := cbsID.String()
+			// Parse the ID and remove from nodes map
+			var id uint32
+			for _, c := range idStr {
+				if c >= '0' && c <= '9' {
+					id = id*10 + uint32(c-'0')
+				}
+			}
+			if id > 0 {
+				delete(nodes, id)
+			}
+		}
+	}
 }

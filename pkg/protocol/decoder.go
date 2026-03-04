@@ -25,6 +25,9 @@ type Message struct {
 	Text      string   // OpUpdateText, OpPushHistory, OpClientNav
 	EventType byte     // OpClientIntent
 	Payload   []byte   // OpClientIntent
+	Offset    uint32   // OpReplaceText
+	Length    uint32   // OpReplaceText
+	Children  []Message // OpBatch
 }
 
 // Decode reads a single CBS message from raw bytes and returns
@@ -131,6 +134,16 @@ func Decode(data []byte) (Message, int, error) {
 		msg.NodeID = binary.BigEndian.Uint32(data[1:5])
 		return msg, 5, nil
 
+	case OpReplaceText:
+		if len(data) < 13 {
+			return msg, 0, ErrShortRead
+		}
+		msg.NodeID = binary.BigEndian.Uint32(data[1:5])
+		msg.Offset = binary.BigEndian.Uint32(data[5:9])
+		msg.Length = binary.BigEndian.Uint32(data[9:13])
+		msg.Text = string(data[13:])
+		return msg, len(data), nil
+
 	case OpSetStyle:
 		if len(data) < 5 {
 			return msg, 0, ErrShortRead
@@ -147,6 +160,18 @@ func Decode(data []byte) (Message, int, error) {
 
 	case OpPushHistory:
 		msg.Text = string(data[1:])
+		return msg, len(data), nil
+
+	case OpBatch:
+		if len(data) < 5 {
+			return msg, 0, ErrShortRead
+		}
+		count := binary.BigEndian.Uint32(data[1:5])
+		children, err := decodeN(data[5:], count)
+		if err != nil {
+			return msg, 0, err
+		}
+		msg.Children = children
 		return msg, len(data), nil
 
 	case OpClientIntent:
@@ -196,6 +221,21 @@ func DecodeAll(data []byte) ([]Message, error) {
 		}
 		msgs = append(msgs, msg)
 		pos += n
+	}
+	return msgs, nil
+}
+
+// decodeN decodes exactly n length-prefixed frames from data.
+func decodeN(data []byte, n uint32) ([]Message, error) {
+	msgs := make([]Message, 0, n)
+	pos := 0
+	for i := uint32(0); i < n; i++ {
+		m, consumed, err := DecodeFrame(data[pos:])
+		if err != nil {
+			return msgs, err
+		}
+		msgs = append(msgs, m)
+		pos += consumed
 	}
 	return msgs, nil
 }

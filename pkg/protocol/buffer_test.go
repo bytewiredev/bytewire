@@ -175,3 +175,211 @@ func BenchmarkDecodeUpdateText(b *testing.B) {
 		_, _, _ = DecodeFrame(data)
 	}
 }
+
+func TestEncodeDecodeReplaceText(t *testing.T) {
+	buf := AcquireBuffer()
+	defer buf.Release()
+
+	buf.EncodeReplaceText(100, 5, 3, "world")
+	msg, n, err := DecodeFrame(buf.Bytes())
+	if err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if n != buf.Len() {
+		t.Fatalf("expected %d bytes consumed, got %d", buf.Len(), n)
+	}
+	if msg.Op != OpReplaceText {
+		t.Fatalf("expected OpReplaceText, got 0x%02x", msg.Op)
+	}
+	if msg.NodeID != 100 {
+		t.Fatalf("expected nodeID 100, got %d", msg.NodeID)
+	}
+	if msg.Offset != 5 || msg.Length != 3 {
+		t.Fatalf("expected offset=5 length=3, got %d %d", msg.Offset, msg.Length)
+	}
+	if msg.Text != "world" {
+		t.Fatalf("expected text %q, got %q", "world", msg.Text)
+	}
+}
+
+func TestEncodeDecodeReplaceTextEmptyReplacement(t *testing.T) {
+	buf := AcquireBuffer()
+	defer buf.Release()
+
+	buf.EncodeReplaceText(200, 0, 10, "")
+	msg, _, err := DecodeFrame(buf.Bytes())
+	if err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if msg.Op != OpReplaceText || msg.NodeID != 200 || msg.Offset != 0 || msg.Length != 10 {
+		t.Fatalf("unexpected: %+v", msg)
+	}
+	if msg.Text != "" {
+		t.Fatalf("expected empty replacement, got %q", msg.Text)
+	}
+}
+
+func TestEncodeDecodeBatchSingle(t *testing.T) {
+	buf := AcquireBuffer()
+	defer buf.Release()
+
+	buf.EncodeBatch(func(inner *Buffer) {
+		inner.EncodeUpdateText(1, "hello")
+	})
+
+	msg, _, err := DecodeFrame(buf.Bytes())
+	if err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if msg.Op != OpBatch {
+		t.Fatalf("expected OpBatch, got 0x%02x", msg.Op)
+	}
+	if len(msg.Children) != 1 {
+		t.Fatalf("expected 1 child, got %d", len(msg.Children))
+	}
+	if msg.Children[0].Op != OpUpdateText || msg.Children[0].Text != "hello" {
+		t.Fatalf("unexpected child: %+v", msg.Children[0])
+	}
+}
+
+func TestEncodeDecodeBatchMultiple(t *testing.T) {
+	buf := AcquireBuffer()
+	defer buf.Release()
+
+	buf.EncodeBatch(func(inner *Buffer) {
+		inner.EncodeInsertNode(10, 1, 0, "div", nil)
+		inner.EncodeUpdateText(11, "text")
+		inner.EncodeSetAttr(10, "class", "active")
+	})
+
+	msg, _, err := DecodeFrame(buf.Bytes())
+	if err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if msg.Op != OpBatch || len(msg.Children) != 3 {
+		t.Fatalf("expected batch with 3 children, got op=0x%02x children=%d", msg.Op, len(msg.Children))
+	}
+	if msg.Children[0].Op != OpInsertNode || msg.Children[0].NodeID != 10 {
+		t.Fatalf("child[0]: %+v", msg.Children[0])
+	}
+	if msg.Children[1].Op != OpUpdateText || msg.Children[1].Text != "text" {
+		t.Fatalf("child[1]: %+v", msg.Children[1])
+	}
+	if msg.Children[2].Op != OpSetAttr || msg.Children[2].Key != "class" {
+		t.Fatalf("child[2]: %+v", msg.Children[2])
+	}
+}
+
+func TestEncodeDecodeBatchEmpty(t *testing.T) {
+	buf := AcquireBuffer()
+	defer buf.Release()
+
+	buf.EncodeBatch(func(inner *Buffer) {
+		// empty batch
+	})
+
+	msg, _, err := DecodeFrame(buf.Bytes())
+	if err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if msg.Op != OpBatch || len(msg.Children) != 0 {
+		t.Fatalf("expected empty batch, got op=0x%02x children=%d", msg.Op, len(msg.Children))
+	}
+}
+
+func TestEncodeDecodeBatchNested(t *testing.T) {
+	buf := AcquireBuffer()
+	defer buf.Release()
+
+	buf.EncodeBatch(func(outer *Buffer) {
+		outer.EncodeUpdateText(1, "before")
+		outer.EncodeBatch(func(inner *Buffer) {
+			inner.EncodeSetAttr(2, "id", "nested")
+		})
+		outer.EncodeRemoveNode(3)
+	})
+
+	msg, _, err := DecodeFrame(buf.Bytes())
+	if err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if msg.Op != OpBatch || len(msg.Children) != 3 {
+		t.Fatalf("expected batch with 3 children, got %d", len(msg.Children))
+	}
+	inner := msg.Children[1]
+	if inner.Op != OpBatch || len(inner.Children) != 1 {
+		t.Fatalf("expected nested batch with 1 child, got op=0x%02x children=%d", inner.Op, len(inner.Children))
+	}
+	if inner.Children[0].Op != OpSetAttr || inner.Children[0].Key != "id" || inner.Children[0].Value != "nested" {
+		t.Fatalf("nested child: %+v", inner.Children[0])
+	}
+}
+
+func TestCountFrames(t *testing.T) {
+	buf := AcquireBuffer()
+	defer buf.Release()
+
+	buf.EncodeUpdateText(1, "a")
+	buf.EncodeRemoveNode(2)
+	buf.EncodeSetAttr(3, "k", "v")
+
+	count := countFrames(buf.Bytes())
+	if count != 3 {
+		t.Fatalf("expected 3 frames, got %d", count)
+	}
+}
+
+func TestBatchInMultiOpStream(t *testing.T) {
+	buf := AcquireBuffer()
+	defer buf.Release()
+
+	buf.EncodeUpdateText(1, "standalone")
+	buf.EncodeBatch(func(inner *Buffer) {
+		inner.EncodeRemoveNode(2)
+		inner.EncodeSetAttr(3, "x", "y")
+	})
+	buf.EncodeRemoveNode(4)
+
+	msgs, err := DecodeAll(buf.Bytes())
+	if err != nil {
+		t.Fatalf("DecodeAll error: %v", err)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 top-level messages, got %d", len(msgs))
+	}
+	if msgs[0].Op != OpUpdateText {
+		t.Fatalf("msg[0]: expected OpUpdateText, got 0x%02x", msgs[0].Op)
+	}
+	if msgs[1].Op != OpBatch || len(msgs[1].Children) != 2 {
+		t.Fatalf("msg[1]: expected batch with 2 children")
+	}
+	if msgs[2].Op != OpRemoveNode || msgs[2].NodeID != 4 {
+		t.Fatalf("msg[2]: expected OpRemoveNode nodeID=4")
+	}
+}
+
+func BenchmarkEncodeBatch(b *testing.B) {
+	buf := AcquireBuffer()
+	defer buf.Release()
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		buf.Reset()
+		buf.EncodeBatch(func(inner *Buffer) {
+			inner.EncodeUpdateText(1, "hello")
+			inner.EncodeSetAttr(2, "class", "active")
+			inner.EncodeRemoveNode(3)
+		})
+	}
+}
+
+func BenchmarkEncodeReplaceText(b *testing.B) {
+	buf := AcquireBuffer()
+	defer buf.Release()
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		buf.Reset()
+		buf.EncodeReplaceText(100, 5, 3, "world")
+	}
+}
