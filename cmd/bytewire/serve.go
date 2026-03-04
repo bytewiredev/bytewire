@@ -35,35 +35,78 @@ func Serve(ctx context.Context, opts ServeOptions) error {
 		return fmt.Errorf("start process: %w", err)
 	}
 
+	fmt.Println("bytewire serve: ready")
+
 	lastMod := latestModTime(opts.Dir)
-	ticker := time.NewTicker(500 * time.Millisecond)
+	w := &watcher{
+		pollInterval: 500 * time.Millisecond,
+		debounce:     300 * time.Millisecond,
+	}
+
+	return w.run(ctx, func() bool {
+		current := latestModTime(opts.Dir)
+		if current.After(lastMod) {
+			lastMod = current
+			return true
+		}
+		return false
+	}, func() {
+		fmt.Println("\nbytewire serve: rebuilding...")
+
+		stopProcess(proc)
+
+		if err := Build(buildOpts); err != nil {
+			fmt.Fprintf(os.Stderr, "rebuild error: %v\n", err)
+			return
+		}
+
+		proc, err = startProcess(opts.Dir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "restart error: %v\n", err)
+			return
+		}
+		fmt.Println("bytewire serve: ready")
+	}, func() {
+		stopProcess(proc)
+	})
+}
+
+// watcher polls for changes and debounces rebuild triggers.
+type watcher struct {
+	pollInterval time.Duration // how often to poll for changes
+	debounce     time.Duration // how long to wait after a change before rebuilding
+}
+
+// run polls using changed() and calls rebuild() after debouncing.
+// cleanup is called on context cancellation.
+func (w *watcher) run(ctx context.Context, changed func() bool, rebuild func(), cleanup func()) error {
+	ticker := time.NewTicker(w.pollInterval)
 	defer ticker.Stop()
+
+	var debounceTimer *time.Timer
+	var debounceCh <-chan time.Time
 
 	for {
 		select {
 		case <-ctx.Done():
-			stopProcess(proc)
+			if debounceTimer != nil {
+				debounceTimer.Stop()
+			}
+			cleanup()
 			return nil
 		case <-ticker.C:
-			current := latestModTime(opts.Dir)
-			if current.After(lastMod) {
-				lastMod = current
-				fmt.Println("\nbytewire serve: change detected, rebuilding...")
-
-				stopProcess(proc)
-
-				if err := Build(buildOpts); err != nil {
-					fmt.Fprintf(os.Stderr, "rebuild error: %v\n", err)
-					continue
+			if changed() {
+				// Reset debounce timer on each change detection
+				if debounceTimer != nil {
+					debounceTimer.Stop()
 				}
-
-				proc, err = startProcess(opts.Dir)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "restart error: %v\n", err)
-					continue
-				}
-				fmt.Println("bytewire serve: restarted")
+				debounceTimer = time.NewTimer(w.debounce)
+				debounceCh = debounceTimer.C
 			}
+		case <-debounceCh:
+			debounceCh = nil
+			debounceTimer = nil
+			rebuild()
 		}
 	}
 }
@@ -105,7 +148,7 @@ func latestModTime(dir string) time.Time {
 		}
 		name := d.Name()
 		// Skip hidden dirs and common non-source dirs
-		if d.IsDir() && (strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules") {
+		if d.IsDir() && (strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules" || name == "dist") {
 			return filepath.SkipDir
 		}
 		if !d.IsDir() && strings.HasSuffix(name, ".go") {

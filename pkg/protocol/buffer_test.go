@@ -373,6 +373,86 @@ func BenchmarkEncodeBatch(b *testing.B) {
 	}
 }
 
+// TestNodeIDConsistencyAcrossOpcodes verifies that node IDs encoded in
+// InsertNode frames are correctly referenced by subsequent opcodes targeting
+// the same node — the server and client must agree on IDs.
+func TestNodeIDConsistencyAcrossOpcodes(t *testing.T) {
+	buf := AcquireBuffer()
+	defer buf.Release()
+
+	// Server inserts node 42, then targets it with text, attr, style, and remove.
+	const id uint32 = 42
+	buf.EncodeInsertNode(id, 1, 0, "span", map[string]string{"class": "label"})
+	buf.EncodeUpdateText(id, "hello")
+	buf.EncodeSetAttr(id, "class", "active")
+	buf.EncodeSetStyle(id, "color", "red")
+	buf.EncodeReplaceText(id, 0, 5, "world")
+	buf.EncodeRemoveAttr(id, "class")
+	buf.EncodeRemoveNode(id)
+
+	msgs, err := DecodeAll(buf.Bytes())
+	if err != nil {
+		t.Fatalf("DecodeAll error: %v", err)
+	}
+	if len(msgs) != 7 {
+		t.Fatalf("expected 7 messages, got %d", len(msgs))
+	}
+	for i, msg := range msgs {
+		if msg.NodeID != id {
+			t.Fatalf("msg[%d] (op=0x%02x): expected nodeID=%d, got %d", i, msg.Op, id, msg.NodeID)
+		}
+	}
+}
+
+// TestInsertNodePreservesNonSequentialIDs verifies that non-sequential and
+// large node IDs survive the encode/decode round trip — the client must not
+// assume sequential assignment.
+func TestInsertNodePreservesNonSequentialIDs(t *testing.T) {
+	ids := []uint32{1, 5, 100, 0xFFFF, 0xDEADBEEF}
+	for _, id := range ids {
+		buf := AcquireBuffer()
+		buf.EncodeInsertNode(id, 0, 0, "div", nil)
+		msg, _, err := DecodeFrame(buf.Bytes())
+		buf.Release()
+		if err != nil {
+			t.Fatalf("id=%d: decode error: %v", id, err)
+		}
+		if msg.NodeID != id {
+			t.Fatalf("expected nodeID=%d, got %d", id, msg.NodeID)
+		}
+	}
+}
+
+// TestInsertAndRemoveThenReinsert verifies that removing a node by ID then
+// re-inserting the same ID produces correct frames — the client registry
+// must handle this lifecycle.
+func TestInsertAndRemoveThenReinsert(t *testing.T) {
+	buf := AcquireBuffer()
+	defer buf.Release()
+
+	const id uint32 = 7
+	buf.EncodeInsertNode(id, 1, 0, "p", nil)
+	buf.EncodeRemoveNode(id)
+	buf.EncodeInsertNode(id, 2, 0, "span", nil)
+
+	msgs, err := DecodeAll(buf.Bytes())
+	if err != nil {
+		t.Fatalf("DecodeAll error: %v", err)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3, got %d", len(msgs))
+	}
+	if msgs[0].Op != OpInsertNode || msgs[0].NodeID != id || msgs[0].ParentID != 1 {
+		t.Fatalf("msg[0]: %+v", msgs[0])
+	}
+	if msgs[1].Op != OpRemoveNode || msgs[1].NodeID != id {
+		t.Fatalf("msg[1]: %+v", msgs[1])
+	}
+	if msgs[2].Op != OpInsertNode || msgs[2].NodeID != id || msgs[2].ParentID != 2 || msgs[2].Tag != "span" {
+		t.Fatalf("msg[2]: %+v", msgs[2])
+	}
+}
+
 func BenchmarkEncodeReplaceText(b *testing.B) {
 	buf := AcquireBuffer()
 	defer buf.Release()

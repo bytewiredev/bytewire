@@ -128,6 +128,14 @@ func (s *Session) handleClientNav(path string) error {
 	return s.flushDirtyNodes()
 }
 
+// Flush drains all dirty DOM nodes and sends the resulting binary opcodes
+// to the client. Call this after mutating signals outside of an event handler
+// (e.g. from a timer, HTTP callback, or background goroutine).
+// Multiple signal changes before a Flush call are coalesced into a single write.
+func (s *Session) Flush() error {
+	return s.flushDirtyNodes()
+}
+
 // Close terminates the session.
 func (s *Session) Close() {
 	s.cancel()

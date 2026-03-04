@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 )
 
 // BuildOptions configures the WASM build.
@@ -23,7 +24,16 @@ func Build(opts BuildOptions) error {
 		opts.Output = "dist"
 	}
 	if opts.Entry == "" {
-		opts.Entry = detectEntry(opts.Dir)
+		entry, err := detectEntry(opts.Dir)
+		if err != nil {
+			return err
+		}
+		opts.Entry = entry
+	}
+
+	// Validate the entry package exists before building.
+	if err := validateEntry(opts.Dir, opts.Entry); err != nil {
+		return err
 	}
 
 	outDir := filepath.Join(opts.Dir, opts.Output)
@@ -32,6 +42,7 @@ func Build(opts BuildOptions) error {
 	}
 
 	wasmOut := filepath.Join(outDir, "bytewire.wasm")
+	start := time.Now()
 
 	// Build WASM binary
 	cmd := exec.Command("go", "build", "-o", wasmOut, opts.Entry)
@@ -49,16 +60,65 @@ func Build(opts BuildOptions) error {
 		return fmt.Errorf("copy wasm_exec.js: %w", err)
 	}
 
+	printBuildStats(outDir, time.Since(start))
 	return nil
 }
 
 // detectEntry finds the WASM entry package in a Bytewire project.
-func detectEntry(dir string) string {
+func detectEntry(dir string) (string, error) {
 	candidate := filepath.Join(dir, "cmd", "wasm", "main.go")
 	if _, err := os.Stat(candidate); err == nil {
-		return "./cmd/wasm"
+		return "./cmd/wasm", nil
 	}
-	return "./cmd/wasm"
+	return "", fmt.Errorf("no WASM entry package found (looked for cmd/wasm/main.go); use --entry to specify one")
+}
+
+// validateEntry checks that the entry package directory exists.
+func validateEntry(dir, entry string) error {
+	entryDir := filepath.Join(dir, entry)
+	info, err := os.Stat(entryDir)
+	if err != nil {
+		return fmt.Errorf("entry package %q not found: %w", entry, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("entry package %q is not a directory", entry)
+	}
+	return nil
+}
+
+// printBuildStats prints file sizes and build duration.
+func printBuildStats(outDir string, elapsed time.Duration) {
+	fmt.Printf("  build completed in %s\n", elapsed.Round(time.Millisecond))
+	entries, err := os.ReadDir(outDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		fmt.Printf("  %s  %s\n", formatSize(info.Size()), e.Name())
+	}
+}
+
+// formatSize formats a byte count as a human-readable string.
+func formatSize(bytes int64) string {
+	const (
+		kb = 1024
+		mb = 1024 * kb
+	)
+	switch {
+	case bytes >= mb:
+		return fmt.Sprintf("%.1f MB", float64(bytes)/float64(mb))
+	case bytes >= kb:
+		return fmt.Sprintf("%.1f KB", float64(bytes)/float64(kb))
+	default:
+		return fmt.Sprintf("%d B", bytes)
+	}
 }
 
 // copyWasmExecJS copies Go's wasm_exec.js to the output directory.
