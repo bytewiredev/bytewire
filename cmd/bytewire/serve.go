@@ -105,7 +105,7 @@ func latestModTime(dir string) time.Time {
 		}
 		name := d.Name()
 		// Skip hidden dirs and common non-source dirs
-		if d.IsDir() && (strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules") {
+		if d.IsDir() && (strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules" || name == "dist") {
 			return filepath.SkipDir
 		}
 		if !d.IsDir() && strings.HasSuffix(name, ".go") {
