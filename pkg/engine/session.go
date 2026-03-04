@@ -10,7 +10,9 @@ import (
 	"sync"
 
 	"github.com/bytewiredev/bytewire/pkg/dom"
+	"github.com/bytewiredev/bytewire/pkg/metrics"
 	"github.com/bytewiredev/bytewire/pkg/protocol"
+	"github.com/bytewiredev/bytewire/pkg/ratelimit"
 )
 
 // SessionID uniquely identifies a connected user session.
@@ -35,6 +37,9 @@ type Session struct {
 	navHandler  func(path string)
 	routeParams map[string]string
 	routeQuery  map[string]string
+
+	limiter *ratelimit.Limiter
+	metrics *metrics.Defaults
 }
 
 // Writer abstracts the binary transport. The engine writes opcode frames here.
@@ -55,14 +60,18 @@ func nextSessionID() SessionID {
 }
 
 // NewSession creates a session bound to a transport writer.
-func NewSession(ctx context.Context, w Writer, logger *slog.Logger) *Session {
+// If limiter is non-nil it will be used to throttle inbound intents.
+// If m is non-nil session events will be recorded as metrics.
+func NewSession(ctx context.Context, w Writer, logger *slog.Logger, limiter *ratelimit.Limiter, m *metrics.Defaults) *Session {
 	ctx, cancel := context.WithCancel(ctx)
 	return &Session{
-		ID:     nextSessionID(),
-		ctx:    ctx,
-		cancel: cancel,
-		writer: w,
-		logger: logger,
+		ID:      nextSessionID(),
+		ctx:     ctx,
+		cancel:  cancel,
+		writer:  w,
+		logger:  logger,
+		limiter: limiter,
+		metrics: m,
 	}
 }
 
@@ -82,6 +91,18 @@ func (s *Session) Mount(comp Component) error {
 // HandleIntent processes a client message (intent or navigation) by dispatching
 // to the appropriate handler, then flushing any resulting DOM updates.
 func (s *Session) HandleIntent(data []byte) error {
+	if s.limiter != nil && !s.limiter.Allow() {
+		s.logger.Warn("intent rate limited", "sessionID", s.ID)
+		if s.metrics != nil {
+			s.metrics.IntentsDropped.Inc()
+		}
+		return nil
+	}
+
+	if s.metrics != nil {
+		s.metrics.IntentsTotal.Inc()
+	}
+
 	msg, _, err := protocol.DecodeFrame(data)
 	if err != nil {
 		return err
@@ -122,6 +143,9 @@ func (s *Session) handleClientIntent(msg protocol.Message) (retErr error) {
 		if r := recover(); r != nil {
 			errMsg := fmt.Sprintf("panic in event handler: %v", r)
 			s.logger.Error("handler panic recovered", "nodeID", msg.NodeID, "error", errMsg)
+			if s.metrics != nil {
+				s.metrics.ErrorsTotal.Inc()
+			}
 
 			buf := protocol.AcquireBuffer()
 			defer buf.Release()
@@ -291,6 +315,10 @@ func (s *Session) flushDirtyNodes() error {
 
 	if len(dirty) == 0 {
 		return nil
+	}
+
+	if s.metrics != nil {
+		s.metrics.FlushTotal.Inc()
 	}
 
 	buf := protocol.AcquireBuffer()

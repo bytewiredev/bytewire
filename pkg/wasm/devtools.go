@@ -70,10 +70,5 @@ func sendDevToolsRequest() {
 	uint8Array := js.Global().Get("Uint8Array").New(len(frame))
 	js.CopyBytesToJS(uint8Array, frame)
 
-	intentWriter.Call("write", uint8Array).Call("catch",
-		js.FuncOf(func(_ js.Value, args []js.Value) any {
-			fmt.Println("bytewire: send devtools request failed:", args[0].Call("toString").String())
-			return nil
-		}),
-	)
+	conn.send(uint8Array)
 }
