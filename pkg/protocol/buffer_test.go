@@ -8,7 +8,7 @@ func TestEncodeDecodeUpdateText(t *testing.T) {
 	buf := AcquireBuffer()
 	defer buf.Release()
 
-	buf.EncodeUpdateText(1024, "Hello CBS")
+	buf.EncodeUpdateText(1024, "Hello Bytewire")
 	msg, n, err := DecodeFrame(buf.Bytes())
 	if err != nil {
 		t.Fatalf("decode error: %v", err)
@@ -22,8 +22,8 @@ func TestEncodeDecodeUpdateText(t *testing.T) {
 	if msg.NodeID != 1024 {
 		t.Fatalf("expected nodeID 1024, got %d", msg.NodeID)
 	}
-	if msg.Text != "Hello CBS" {
-		t.Fatalf("expected text %q, got %q", "Hello CBS", msg.Text)
+	if msg.Text != "Hello Bytewire" {
+		t.Fatalf("expected text %q, got %q", "Hello Bytewire", msg.Text)
 	}
 }
 
@@ -130,7 +130,7 @@ func BenchmarkEncodeUpdateText(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		buf.Reset()
-		buf.EncodeUpdateText(1024, "Hello CBS")
+		buf.EncodeUpdateText(1024, "Hello Bytewire")
 	}
 }
 
@@ -166,7 +166,7 @@ func TestMultiOpcodeRoundTrip(t *testing.T) {
 
 func BenchmarkDecodeUpdateText(b *testing.B) {
 	buf := AcquireBuffer()
-	buf.EncodeUpdateText(1024, "Hello CBS")
+	buf.EncodeUpdateText(1024, "Hello Bytewire")
 	data := buf.Bytes()
 	buf.Release()
 

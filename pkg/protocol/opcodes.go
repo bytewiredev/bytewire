@@ -1,4 +1,4 @@
-// Package protocol defines the CBS binary instruction set for DOM mutations.
+// Package protocol defines the Bytewire binary instruction set for DOM mutations.
 //
 // Every message is a compact byte sequence: [1B Opcode][4B NodeID][Payload].
 // This eliminates JSON parsing overhead and enables zero-copy DOM patching.

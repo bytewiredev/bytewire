@@ -16,7 +16,7 @@ import (
 	"github.com/quic-go/webtransport-go"
 )
 
-// Server is the CBS WebTransport server that accepts connections
+// Server is the Bytewire WebTransport server that accepts connections
 // and spawns per-user sessions.
 type Server struct {
 	addr        string
@@ -65,7 +65,7 @@ func WithHTTPAddr(addr string) ServerOption {
 	return func(s *Server) { s.httpAddr = addr }
 }
 
-// NewServer creates a CBS server listening on addr.
+// NewServer creates a Bytewire server listening on addr.
 // If tlsConfig is nil, ListenAndServe will auto-generate an ephemeral dev cert.
 func NewServer(addr string, tlsConfig *tls.Config, comp Component, opts ...ServerOption) *Server {
 	s := &Server{
@@ -82,7 +82,7 @@ func NewServer(addr string, tlsConfig *tls.Config, comp Component, opts ...Serve
 	return s
 }
 
-// Setup registers the WebTransport /cbs handler on the given mux and
+// Setup registers the WebTransport /bw handler on the given mux and
 // initializes the internal webtransport.Server. Call this when you want
 // to control the mux and server lifecycle yourself.
 func (s *Server) Setup(mux *http.ServeMux) {
@@ -96,7 +96,7 @@ func (s *Server) Setup(mux *http.ServeMux) {
 	}
 	webtransport.ConfigureHTTP3Server(s.wt.H3)
 
-	mux.HandleFunc("/cbs", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/bw", func(w http.ResponseWriter, r *http.Request) {
 		sess, err := s.wt.Upgrade(w, r)
 		if err != nil {
 			s.logger.Error("webtransport upgrade failed", "error", err)
@@ -109,7 +109,7 @@ func (s *Server) Setup(mux *http.ServeMux) {
 // ServeUDP starts the WebTransport server on an existing UDP connection.
 // Setup must be called first.
 func (s *Server) ServeUDP(conn net.PacketConn) error {
-	s.logger.Info("CBS server starting (UDP)", "addr", s.addr)
+	s.logger.Info("Bytewire server starting (UDP)", "addr", s.addr)
 	return s.wt.Serve(conn)
 }
 
@@ -173,7 +173,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		}
 	}()
 
-	s.logger.Info("CBS server starting", "wtAddr", s.addr, "httpAddr", s.httpAddr)
+	s.logger.Info("Bytewire server starting", "wtAddr", s.addr, "httpAddr", s.httpAddr)
 	<-ctx.Done()
 	s.logger.Info("shutting down...")
 
@@ -284,27 +284,27 @@ func buildShellHTML(certHashJS, css, wtAddr string) string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CBS App</title>
+  <title>Bytewire App</title>
   <style>
 button{cursor:pointer;user-select:none;-webkit-user-select:none;border:none;outline:none}
 button:active{opacity:0.8;transform:scale(0.97)}
 %s</style>
 </head>
 <body>
-  <div id="cbs-root"></div>
+  <div id="bw-root"></div>
   <script>
-    window.__cbs_config = {
-      url: "https://localhost%s/cbs",
+    window.__bw_config = {
+      url: "https://localhost%s/bw",
       certHash: new Uint8Array(%s)
     };
   </script>
   <script src="/static/wasm_exec.js"></script>
   <script>
     const go = new Go();
-    WebAssembly.instantiateStreaming(fetch("/static/cbs.wasm"), go.importObject)
+    WebAssembly.instantiateStreaming(fetch("/static/bytewire.wasm"), go.importObject)
       .then(result => go.run(result.instance))
       .catch(err => {
-        document.getElementById("cbs-root").textContent = "WASM load failed: " + err.message;
+        document.getElementById("bw-root").textContent = "WASM load failed: " + err.message;
       });
   </script>
 </body>

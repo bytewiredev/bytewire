@@ -158,13 +158,13 @@ func StyleF[T comparable](s *Signal[T], property string, format func(T) string) 
 	}
 }
 
-// Link sets href and data-cbs-link attributes on an <a> element for SPA navigation.
-// The WASM client intercepts clicks on elements with data-cbs-link to prevent
+// Link sets href and data-bw-link attributes on an <a> element for SPA navigation.
+// The WASM client intercepts clicks on elements with data-bw-link to prevent
 // full page loads and instead sends OpClientNav to the server.
 func Link(href string) Option {
 	return func(n *Node) {
 		n.Attrs["href"] = href
-		n.Attrs["data-cbs-link"] = ""
+		n.Attrs["data-bw-link"] = ""
 	}
 }
 

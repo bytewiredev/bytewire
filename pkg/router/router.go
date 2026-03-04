@@ -1,4 +1,4 @@
-// Package router provides client-side routing for CBS applications.
+// Package router provides client-side routing for Bytewire applications.
 // A Router is a Component that swaps child subtrees based on the current URL path.
 package router
 

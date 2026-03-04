@@ -12,12 +12,12 @@ import (
 func RequestPasskey(rpID string, challenge []byte) (js.Value, error) {
 	navigator := js.Global().Get("navigator")
 	if navigator.IsUndefined() {
-		return js.Undefined(), fmt.Errorf("cbs: navigator not available")
+		return js.Undefined(), fmt.Errorf("bytewire: navigator not available")
 	}
 
 	credentials := navigator.Get("credentials")
 	if credentials.IsUndefined() {
-		return js.Undefined(), fmt.Errorf("cbs: WebAuthn not supported")
+		return js.Undefined(), fmt.Errorf("bytewire: WebAuthn not supported")
 	}
 
 	// Build the PublicKeyCredentialRequestOptions

@@ -179,9 +179,9 @@ func applyFrame(data []byte) {
 			el.Call("setAttribute", k, v)
 		}
 
-		// Set data-cbs-id so cbs.js can map DOM events back to CBS node IDs.
+		// Set data-bw-id so the WASM client can map DOM events back to Bytewire node IDs.
 		if tag != "#text" {
-			el.Call("setAttribute", "data-cbs-id", fmt.Sprintf("%d", nodeID))
+			el.Call("setAttribute", "data-bw-id", fmt.Sprintf("%d", nodeID))
 		}
 
 		nodes[nodeID] = el
@@ -272,7 +272,7 @@ func applyFrame(data []byte) {
 		applyOpcodes(data[p+4:])
 
 	default:
-		fmt.Printf("cbs: unknown opcode 0x%02x\n", op)
+		fmt.Printf("bytewire: unknown opcode 0x%02x\n", op)
 	}
 }
 
@@ -295,9 +295,9 @@ func cleanupDescendants(el js.Value) {
 	for i := range length {
 		child := children.Index(i)
 		cleanupDescendants(child)
-		cbsID := child.Call("getAttribute", "data-cbs-id")
-		if !cbsID.IsNull() && !cbsID.IsUndefined() {
-			idStr := cbsID.String()
+		bwID := child.Call("getAttribute", "data-bw-id")
+		if !bwID.IsNull() && !bwID.IsUndefined() {
+			idStr := bwID.String()
 			// Parse the ID and remove from nodes map
 			var id uint32
 			for _, c := range idStr {

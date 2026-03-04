@@ -14,7 +14,7 @@ type BuildOptions struct {
 	Entry  string // entry package path (relative to Dir)
 }
 
-// Build compiles the CBS WASM client module.
+// Build compiles the Bytewire WASM client module.
 func Build(opts BuildOptions) error {
 	if opts.Dir == "" {
 		opts.Dir = "."
@@ -31,7 +31,7 @@ func Build(opts BuildOptions) error {
 		return fmt.Errorf("create output dir: %w", err)
 	}
 
-	wasmOut := filepath.Join(outDir, "cbs.wasm")
+	wasmOut := filepath.Join(outDir, "bytewire.wasm")
 
 	// Build WASM binary
 	cmd := exec.Command("go", "build", "-o", wasmOut, opts.Entry)
@@ -52,7 +52,7 @@ func Build(opts BuildOptions) error {
 	return nil
 }
 
-// detectEntry finds the WASM entry package in a CBS project.
+// detectEntry finds the WASM entry package in a Bytewire project.
 func detectEntry(dir string) string {
 	candidate := filepath.Join(dir, "cmd", "wasm", "main.go")
 	if _, err := os.Stat(candidate); err == nil {

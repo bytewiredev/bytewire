@@ -23,7 +23,7 @@ func Serve(ctx context.Context, opts ServeOptions) error {
 	}
 
 	// Initial build
-	fmt.Println("cbs serve: initial build...")
+	fmt.Println("bytewire serve: initial build...")
 	buildOpts := BuildOptions{Dir: opts.Dir, Entry: opts.Entry}
 	if err := Build(buildOpts); err != nil {
 		return fmt.Errorf("initial build: %w", err)
@@ -48,7 +48,7 @@ func Serve(ctx context.Context, opts ServeOptions) error {
 			current := latestModTime(opts.Dir)
 			if current.After(lastMod) {
 				lastMod = current
-				fmt.Println("\ncbs serve: change detected, rebuilding...")
+				fmt.Println("\nbytewire serve: change detected, rebuilding...")
 
 				stopProcess(proc)
 
@@ -62,7 +62,7 @@ func Serve(ctx context.Context, opts ServeOptions) error {
 					fmt.Fprintf(os.Stderr, "restart error: %v\n", err)
 					continue
 				}
-				fmt.Println("cbs serve: restarted")
+				fmt.Println("bytewire serve: restarted")
 			}
 		}
 	}

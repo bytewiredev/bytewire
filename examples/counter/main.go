@@ -1,4 +1,4 @@
-// Counter is a minimal CBS example: a button that increments a number.
+// Counter is a minimal Bytewire example: a button that increments a number.
 // The entire UI is pure Go — no HTML templates, no JavaScript, no JSON API.
 package main
 
@@ -24,7 +24,7 @@ func counterApp(s *engine.Session) *dom.Node {
 		dom.Children(
 			dom.H1(
 				dom.Class(style.Classes(style.Text3Xl, style.FontBold, style.TextGray900)),
-				dom.Children(dom.Text("CBS Counter")),
+				dom.Children(dom.Text("Bytewire Counter")),
 			),
 			dom.Div(
 				dom.Class(style.Classes(style.Text2Xl, style.FontMedium)),
@@ -67,7 +67,7 @@ func main() {
 	// For development, use a self-signed TLS cert.
 	// In production, use Let's Encrypt or your own CA.
 	tlsConfig := &tls.Config{
-		// TLS 1.3 only — as per the CBS manifesto
+		// TLS 1.3 only — as per the Bytewire manifesto
 		MinVersion: tls.VersionTLS13,
 	}
 

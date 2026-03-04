@@ -1,4 +1,4 @@
-// Package dom provides the developer-facing API for building CBS UIs in pure Go.
+// Package dom provides the developer-facing API for building Bytewire UIs in pure Go.
 package dom
 
 import (

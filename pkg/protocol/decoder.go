@@ -7,12 +7,12 @@ import (
 )
 
 var (
-	ErrShortRead    = errors.New("cbs: unexpected end of message")
-	ErrUnknownOp    = errors.New("cbs: unknown opcode")
-	ErrInvalidFrame = errors.New("cbs: invalid frame structure")
+	ErrShortRead    = errors.New("bytewire: unexpected end of message")
+	ErrUnknownOp    = errors.New("bytewire: unknown opcode")
+	ErrInvalidFrame = errors.New("bytewire: invalid frame structure")
 )
 
-// Message is a decoded CBS binary instruction.
+// Message is a decoded Bytewire binary instruction.
 type Message struct {
 	Op        byte
 	NodeID    uint32
@@ -30,7 +30,7 @@ type Message struct {
 	Children  []Message // OpBatch
 }
 
-// Decode reads a single CBS message from raw bytes and returns
+// Decode reads a single Bytewire message from raw bytes and returns
 // the decoded Message plus the number of bytes consumed.
 func Decode(data []byte) (Message, int, error) {
 	if len(data) < 1 {

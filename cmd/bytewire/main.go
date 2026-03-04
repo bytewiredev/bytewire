@@ -1,4 +1,4 @@
-// CBS CLI tool for building and running CBS applications.
+// Bytewire CLI tool for building and running Bytewire applications.
 package main
 
 import (
@@ -19,18 +19,18 @@ func main() {
 
 	switch os.Args[1] {
 	case "version":
-		fmt.Printf("cbs v%s\n", version)
+		fmt.Printf("bytewire v%s\n", version)
 	case "build":
 		opts := parseBuildFlags(os.Args[2:])
-		fmt.Println("cbs build: compiling WASM client...")
+		fmt.Println("bytewire build: compiling WASM client...")
 		if err := Build(opts); err != nil {
 			fmt.Fprintf(os.Stderr, "build error: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Println("cbs build: done")
+		fmt.Println("bytewire build: done")
 	case "serve":
 		opts := parseServeFlags(os.Args[2:])
-		fmt.Println("cbs serve: starting development server...")
+		fmt.Println("bytewire serve: starting development server...")
 
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer cancel()
@@ -47,17 +47,17 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println(`CBS - Continuous Binary Synchronization
+	fmt.Println(`Bytewire - Binary Wire Protocol UI Framework
 
 Usage:
-  cbs <command> [flags]
+  bytewire <command> [flags]
 
 Commands:
   build    Compile the WASM client module
   serve    Start the development server with auto-rebuild
   version  Print version information
 
-Run 'cbs <command> -help' for command-specific flags.`)
+Run 'bytewire <command> -help' for command-specific flags.`)
 }
 
 func parseBuildFlags(args []string) BuildOptions {

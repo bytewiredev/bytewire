@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-// Buffer is a reusable, zero-allocation binary encoder for CBS opcodes.
+// Buffer is a reusable, zero-allocation binary encoder for Bytewire opcodes.
 // It pools internal byte slices to minimize GC pressure on hot paths.
 type Buffer struct {
 	buf []byte

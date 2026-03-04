@@ -1,6 +1,6 @@
 //go:build js && wasm
 
-// Package wasm is the CBS browser client. It connects WebTransport,
+// Package wasm is the Bytewire browser client. It connects WebTransport,
 // receives binary opcodes, patches the DOM, and delegates events —
 // all from Go via syscall/js. No external JavaScript required.
 package wasm
@@ -27,22 +27,22 @@ func init() {
 	nodes = make(map[uint32]js.Value)
 }
 
-// Start initializes the CBS WASM client: connects WebTransport,
+// Start initializes the Bytewire WASM client: connects WebTransport,
 // reads server patches, and sets up event delegation.
 func Start() {
-	root = document.Call("getElementById", "cbs-root")
+	root = document.Call("getElementById", "bw-root")
 	if root.IsNull() {
-		fmt.Println("cbs: #cbs-root not found")
+		fmt.Println("bytewire: #bw-root not found")
 		return
 	}
 
 	root.Set("textContent", "Connecting…")
-	fmt.Println("cbs: WASM client initialized")
+	fmt.Println("bytewire: WASM client initialized")
 
-	// Read config from window.__cbs_config injected by the server.
-	config := js.Global().Get("__cbs_config")
+	// Read config from window.__bw_config injected by the server.
+	config := js.Global().Get("__bw_config")
 	if config.IsUndefined() || config.IsNull() {
-		root.Set("textContent", "Error: __cbs_config not set")
+		root.Set("textContent", "Error: __bw_config not set")
 		return
 	}
 
@@ -85,11 +85,11 @@ func Start() {
 
 	if connectErr != "" {
 		root.Set("textContent", "WebTransport failed: "+connectErr)
-		fmt.Println("cbs: WebTransport failed:", connectErr)
+		fmt.Println("bytewire: WebTransport failed:", connectErr)
 		return
 	}
 
-	fmt.Println("cbs: WebTransport connected")
+	fmt.Println("bytewire: WebTransport connected")
 	root.Set("textContent", "")
 
 	// Start reading server patches (unidirectional streams)
@@ -107,7 +107,7 @@ func Start() {
 		}),
 	).Call("catch",
 		js.FuncOf(func(_ js.Value, args []js.Value) any {
-			fmt.Println("cbs: failed to open intent stream", args[0].Call("toString").String())
+			fmt.Println("bytewire: failed to open intent stream", args[0].Call("toString").String())
 			close(openDone)
 			return nil
 		}),
@@ -126,10 +126,10 @@ func Start() {
 		return nil
 	}))
 
-	// Set up event delegation on #cbs-root
+	// Set up event delegation on #bw-root
 	setupEventDelegation()
 
-	fmt.Println("cbs: event delegation active")
+	fmt.Println("bytewire: event delegation active")
 
 	// Keep alive
 	select {}
@@ -154,7 +154,7 @@ func readIncomingStreams(wt js.Value) {
 			}),
 		).Call("catch",
 			js.FuncOf(func(_ js.Value, args []js.Value) any {
-				fmt.Println("cbs: stream reader error:", args[0].Call("toString").String())
+				fmt.Println("bytewire: stream reader error:", args[0].Call("toString").String())
 				return nil
 			}),
 		)
@@ -201,7 +201,7 @@ func readStreamAndPatch(stream js.Value, reader js.Value, readNext js.Func) {
 			}),
 		).Call("catch",
 			js.FuncOf(func(_ js.Value, args []js.Value) any {
-				fmt.Println("cbs: chunk read error:", args[0].Call("toString").String())
+				fmt.Println("bytewire: chunk read error:", args[0].Call("toString").String())
 				readNext.Invoke()
 				return nil
 			}),
@@ -227,7 +227,7 @@ func sendIntent(nodeID uint32, eventType byte, payload []byte) {
 
 	intentWriter.Call("write", uint8Array).Call("catch",
 		js.FuncOf(func(_ js.Value, args []js.Value) any {
-			fmt.Println("cbs: send intent failed:", args[0].Call("toString").String())
+			fmt.Println("bytewire: send intent failed:", args[0].Call("toString").String())
 			return nil
 		}),
 	)
@@ -246,17 +246,17 @@ func sendClientNav(path string) {
 
 	intentWriter.Call("write", uint8Array).Call("catch",
 		js.FuncOf(func(_ js.Value, args []js.Value) any {
-			fmt.Println("cbs: send nav failed:", args[0].Call("toString").String())
+			fmt.Println("bytewire: send nav failed:", args[0].Call("toString").String())
 			return nil
 		}),
 	)
 }
 
-// findCBSNode walks up from el to find the nearest element with data-cbs-id.
-func findCBSNode(el js.Value) (uint32, bool) {
+// findBWNode walks up from el to find the nearest element with data-bw-id.
+func findBWNode(el js.Value) (uint32, bool) {
 	body := document.Get("body")
 	for !el.IsNull() && !el.IsUndefined() && !el.Equal(body) {
-		attr := el.Call("getAttribute", "data-cbs-id")
+		attr := el.Call("getAttribute", "data-bw-id")
 		if !attr.IsNull() && !attr.IsUndefined() {
 			id, err := strconv.Atoi(attr.String())
 			if err == nil {
@@ -268,14 +268,14 @@ func findCBSNode(el js.Value) (uint32, bool) {
 	return 0, false
 }
 
-// setupEventDelegation attaches event listeners on #cbs-root that
-// map DOM events to CBS binary intents.
+// setupEventDelegation attaches event listeners on #bw-root that
+// map DOM events to Bytewire binary intents.
 func setupEventDelegation() {
 	// Click
 	root.Call("addEventListener", "click", js.FuncOf(func(_ js.Value, args []js.Value) any {
 		e := args[0]
 		target := e.Get("target")
-		if nodeID, ok := findCBSNode(target); ok {
+		if nodeID, ok := findBWNode(target); ok {
 			e.Call("stopPropagation")
 			sendIntent(nodeID, 0x01, nil) // EventClick
 		}
@@ -286,7 +286,7 @@ func setupEventDelegation() {
 	root.Call("addEventListener", "input", js.FuncOf(func(_ js.Value, args []js.Value) any {
 		e := args[0]
 		target := e.Get("target")
-		if nodeID, ok := findCBSNode(target); ok {
+		if nodeID, ok := findBWNode(target); ok {
 			val := target.Get("value").String()
 			sendIntent(nodeID, 0x02, []byte(val)) // EventInput
 		}
@@ -298,24 +298,24 @@ func setupEventDelegation() {
 		e := args[0]
 		e.Call("preventDefault")
 		target := e.Get("target")
-		if nodeID, ok := findCBSNode(target); ok {
+		if nodeID, ok := findBWNode(target); ok {
 			sendIntent(nodeID, 0x03, nil) // EventSubmit
 		}
 		return nil
 	}))
 
-	// SPA link interception: <a data-cbs-link href="/path">
+	// SPA link interception: <a data-bw-link href="/path">
 	root.Call("addEventListener", "click", js.FuncOf(func(_ js.Value, args []js.Value) any {
 		e := args[0]
 		target := e.Get("target")
 
-		// Walk up to find nearest <a> with data-cbs-link
+		// Walk up to find nearest <a> with data-bw-link
 		body := document.Get("body")
 		el := target
 		for !el.IsNull() && !el.IsUndefined() && !el.Equal(body) {
 			tagName := el.Get("tagName")
 			if !tagName.IsUndefined() && tagName.String() == "A" {
-				linkAttr := el.Call("getAttribute", "data-cbs-link")
+				linkAttr := el.Call("getAttribute", "data-bw-link")
 				if !linkAttr.IsNull() && !linkAttr.IsUndefined() {
 					href := el.Call("getAttribute", "href")
 					if !href.IsNull() && !href.IsUndefined() {

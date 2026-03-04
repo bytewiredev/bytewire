@@ -1,4 +1,4 @@
-// Package engine provides the CBS server runtime: WebTransport listener,
+// Package engine provides the Bytewire server runtime: WebTransport listener,
 // per-user session goroutines, and binary stream multiplexing.
 package engine
 
