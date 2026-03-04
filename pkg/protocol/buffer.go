@@ -63,32 +63,55 @@ func (b *Buffer) writeBytes(data []byte) {
 	b.buf = append(b.buf, data...)
 }
 
+// beginFrame reserves 4 bytes for the frame length prefix and returns the
+// offset where the length will be written.
+func (b *Buffer) beginFrame() int {
+	off := len(b.buf)
+	b.buf = append(b.buf, 0, 0, 0, 0) // placeholder for uint32 length
+	return off
+}
+
+// endFrame patches the 4-byte length prefix at the given offset with the
+// actual frame size (everything after the 4-byte prefix).
+func (b *Buffer) endFrame(off int) {
+	frameLen := uint32(len(b.buf) - off - 4)
+	binary.BigEndian.PutUint32(b.buf[off:off+4], frameLen)
+}
+
 // EncodeUpdateText writes an OpUpdateText instruction.
 func (b *Buffer) EncodeUpdateText(nodeID uint32, text string) {
+	off := b.beginFrame()
 	b.writeByte(OpUpdateText)
 	b.writeUint32(nodeID)
 	b.writeBytes([]byte(text))
+	b.endFrame(off)
 }
 
 // EncodeSetAttr writes an OpSetAttr instruction.
 func (b *Buffer) EncodeSetAttr(nodeID uint32, key, value string) {
+	off := b.beginFrame()
 	b.writeByte(OpSetAttr)
 	b.writeUint32(nodeID)
 	b.writeBytes([]byte(key))
 	b.writeByte(0x00) // null separator
 	b.writeBytes([]byte(value))
+	b.endFrame(off)
 }
 
 // EncodeRemoveAttr writes an OpRemoveAttr instruction.
 func (b *Buffer) EncodeRemoveAttr(nodeID uint32, key string) {
+	off := b.beginFrame()
 	b.writeByte(OpRemoveAttr)
 	b.writeUint32(nodeID)
 	b.writeBytes([]byte(key))
+	b.endFrame(off)
 }
 
 // EncodeInsertNode writes an OpInsertNode instruction.
-func (b *Buffer) EncodeInsertNode(parentID, siblingID uint32, tag string, attrs map[string]string) {
+func (b *Buffer) EncodeInsertNode(nodeID, parentID, siblingID uint32, tag string, attrs map[string]string) {
+	off := b.beginFrame()
 	b.writeByte(OpInsertNode)
+	b.writeUint32(nodeID)
 	b.writeUint32(parentID)
 	b.writeUint32(siblingID)
 
@@ -108,39 +131,50 @@ func (b *Buffer) EncodeInsertNode(parentID, siblingID uint32, tag string, attrs 
 		b.buf = binary.BigEndian.AppendUint16(b.buf, uint16(len(vb)))
 		b.writeBytes(vb)
 	}
+	b.endFrame(off)
 }
 
 // EncodeRemoveNode writes an OpRemoveNode instruction.
 func (b *Buffer) EncodeRemoveNode(nodeID uint32) {
+	off := b.beginFrame()
 	b.writeByte(OpRemoveNode)
 	b.writeUint32(nodeID)
+	b.endFrame(off)
 }
 
 // EncodeSetStyle writes an OpSetStyle instruction.
 func (b *Buffer) EncodeSetStyle(nodeID uint32, property, value string) {
+	off := b.beginFrame()
 	b.writeByte(OpSetStyle)
 	b.writeUint32(nodeID)
 	b.writeBytes([]byte(property))
 	b.writeByte(0x00)
 	b.writeBytes([]byte(value))
+	b.endFrame(off)
 }
 
 // EncodePushHistory writes an OpPushHistory instruction.
 func (b *Buffer) EncodePushHistory(path string) {
+	off := b.beginFrame()
 	b.writeByte(OpPushHistory)
 	b.writeBytes([]byte(path))
+	b.endFrame(off)
 }
 
 // EncodeClientIntent writes an OpClientIntent instruction.
 func (b *Buffer) EncodeClientIntent(nodeID uint32, eventType byte, payload []byte) {
+	off := b.beginFrame()
 	b.writeByte(OpClientIntent)
 	b.writeUint32(nodeID)
 	b.writeByte(eventType)
 	b.writeBytes(payload)
+	b.endFrame(off)
 }
 
 // EncodeClientNav writes an OpClientNav instruction.
 func (b *Buffer) EncodeClientNav(path string) {
+	off := b.beginFrame()
 	b.writeByte(OpClientNav)
 	b.writeBytes([]byte(path))
+	b.endFrame(off)
 }

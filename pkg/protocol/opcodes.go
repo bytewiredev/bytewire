@@ -19,7 +19,7 @@ const (
 	OpRemoveAttr byte = 0x03
 
 	// OpInsertNode inserts a new element into the DOM tree.
-	// Format: [0x04][4B ParentID][4B SiblingID][1B TagLen][tag bytes][2B AttrCount][attrs...]
+	// Format: [0x04][4B NodeID][4B ParentID][4B SiblingID][1B TagLen][tag bytes][2B AttrCount][attrs...]
 	// SiblingID of 0 means append as last child.
 	OpInsertNode byte = 0x04
 

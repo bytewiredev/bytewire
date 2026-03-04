@@ -75,7 +75,7 @@ func (s *Session) Mount(comp Component) error {
 // HandleIntent processes a client event (click, input, etc.) by dispatching
 // to the appropriate node handler, then diffing and sending any resulting updates.
 func (s *Session) HandleIntent(data []byte) error {
-	msg, _, err := protocol.Decode(data)
+	msg, _, err := protocol.DecodeFrame(data)
 	if err != nil {
 		return err
 	}
@@ -98,12 +98,9 @@ func (s *Session) HandleIntent(data []byte) error {
 		return nil
 	}
 
-	// Snapshot old tree for diffing
-	// For now, we rely on signal observers to mutate the tree in-place
-	// and then re-emit changed nodes.
 	handler(msg.Payload)
 
-	return nil
+	return s.flushDirtyNodes()
 }
 
 // Close terminates the session.
@@ -123,6 +120,11 @@ func emitFullTree(buf *protocol.Buffer, n *dom.Node) {
 		return
 	}
 	if n.Type == dom.TextNode {
+		parentID := uint32(0)
+		if n.Parent != nil {
+			parentID = uint32(n.Parent.ID)
+		}
+		buf.EncodeInsertNode(uint32(n.ID), parentID, 0, "#text", nil)
 		buf.EncodeUpdateText(uint32(n.ID), n.Text)
 		return
 	}
@@ -131,10 +133,46 @@ func emitFullTree(buf *protocol.Buffer, n *dom.Node) {
 	if n.Parent != nil {
 		parentID = uint32(n.Parent.ID)
 	}
-	buf.EncodeInsertNode(parentID, 0, n.Tag, n.Attrs)
+	buf.EncodeInsertNode(uint32(n.ID), parentID, 0, n.Tag, n.Attrs)
 
 	for _, child := range n.Children {
 		emitFullTree(buf, child)
+	}
+}
+
+// flushDirtyNodes walks the tree, emits OpUpdateText for any dirty nodes,
+// and sends the buffer to the client.
+func (s *Session) flushDirtyNodes() error {
+	s.mu.Lock()
+	var dirty []*dom.Node
+	collectDirty(s.root, &dirty)
+	s.mu.Unlock()
+
+	if len(dirty) == 0 {
+		return nil
+	}
+
+	buf := protocol.AcquireBuffer()
+	defer buf.Release()
+
+	for _, n := range dirty {
+		buf.EncodeUpdateText(uint32(n.ID), n.Text)
+		n.Dirty = false
+	}
+
+	return s.writer.WriteMessage(buf.Bytes())
+}
+
+// collectDirty gathers all nodes with Dirty=true.
+func collectDirty(n *dom.Node, out *[]*dom.Node) {
+	if n == nil {
+		return
+	}
+	if n.Dirty {
+		*out = append(*out, n)
+	}
+	for _, child := range n.Children {
+		collectDirty(child, out)
 	}
 }
 

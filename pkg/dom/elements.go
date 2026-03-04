@@ -111,8 +111,10 @@ func Text(content string) *Node {
 // the node is automatically updated via binary delta.
 func TextF[T comparable](s *Signal[T], format func(T) string) *Node {
 	n := newText(format(s.Get()))
+	n.SignalBound = true
 	s.Observe(func(v T) {
 		n.Text = format(v)
+		n.Dirty = true
 	})
 	return n
 }

@@ -32,6 +32,11 @@ type Node struct {
 
 	// Event handlers keyed by event type byte (EventClick, etc.)
 	Handlers map[byte]func([]byte)
+
+	// Dirty is set to true by signal observers when the node's text changes.
+	Dirty bool
+	// SignalBound is true if this node was created via TextF and is bound to a signal.
+	SignalBound bool
 }
 
 // newElement creates an element node with the given tag.

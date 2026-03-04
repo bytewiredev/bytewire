@@ -1,6 +1,7 @@
 package dom
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 )
@@ -94,6 +95,44 @@ func TestSignalConcurrency(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+func TestTextFDirtyTracking(t *testing.T) {
+	count := NewSignal(0)
+	node := TextF(count, func(v int) string {
+		return fmt.Sprintf("Count: %d", v)
+	})
+
+	if node.Text != "Count: 0" {
+		t.Fatalf("expected initial text %q, got %q", "Count: 0", node.Text)
+	}
+	if !node.SignalBound {
+		t.Fatal("expected SignalBound to be true")
+	}
+	if node.Dirty {
+		t.Fatal("expected Dirty to be false initially")
+	}
+
+	count.Set(5)
+
+	if node.Text != "Count: 5" {
+		t.Fatalf("expected text %q, got %q", "Count: 5", node.Text)
+	}
+	if !node.Dirty {
+		t.Fatal("expected Dirty to be true after signal update")
+	}
+
+	// Simulate flush
+	node.Dirty = false
+	if node.Dirty {
+		t.Fatal("expected Dirty to be false after flush")
+	}
+
+	// Setting same value should not trigger observer
+	count.Set(5)
+	if node.Dirty {
+		t.Fatal("expected Dirty to remain false for same value")
+	}
 }
 
 func BenchmarkSignalSet(b *testing.B) {

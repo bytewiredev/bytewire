@@ -70,12 +70,13 @@ func Decode(data []byte) (Message, int, error) {
 		return msg, len(data), nil
 
 	case OpInsertNode:
-		if len(data) < 10 {
+		if len(data) < 14 {
 			return msg, 0, ErrShortRead
 		}
-		msg.ParentID = binary.BigEndian.Uint32(data[1:5])
-		msg.SiblingID = binary.BigEndian.Uint32(data[5:9])
-		pos = 9
+		msg.NodeID = binary.BigEndian.Uint32(data[1:5])
+		msg.ParentID = binary.BigEndian.Uint32(data[5:9])
+		msg.SiblingID = binary.BigEndian.Uint32(data[9:13])
+		pos = 13
 
 		// Tag
 		if pos >= len(data) {
@@ -164,6 +165,39 @@ func Decode(data []byte) (Message, int, error) {
 	default:
 		return msg, 0, fmt.Errorf("%w: 0x%02x", ErrUnknownOp, msg.Op)
 	}
+}
+
+// DecodeFrame reads a 4-byte length prefix, then decodes the opcode frame
+// within that boundary. Returns the decoded message and total bytes consumed
+// (including the 4-byte prefix).
+func DecodeFrame(data []byte) (Message, int, error) {
+	if len(data) < 4 {
+		return Message{}, 0, ErrShortRead
+	}
+	frameLen := int(binary.BigEndian.Uint32(data[0:4]))
+	if len(data) < 4+frameLen {
+		return Message{}, 0, ErrShortRead
+	}
+	msg, _, err := Decode(data[4 : 4+frameLen])
+	if err != nil {
+		return msg, 0, err
+	}
+	return msg, 4 + frameLen, nil
+}
+
+// DecodeAll reads all length-prefixed frames from data and returns them.
+func DecodeAll(data []byte) ([]Message, error) {
+	var msgs []Message
+	pos := 0
+	for pos < len(data) {
+		msg, n, err := DecodeFrame(data[pos:])
+		if err != nil {
+			return msgs, err
+		}
+		msgs = append(msgs, msg)
+		pos += n
+	}
+	return msgs, nil
 }
 
 func findNull(data []byte) int {

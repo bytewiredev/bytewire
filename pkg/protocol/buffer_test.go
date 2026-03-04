@@ -9,7 +9,7 @@ func TestEncodeDecodeUpdateText(t *testing.T) {
 	defer buf.Release()
 
 	buf.EncodeUpdateText(1024, "Hello CBS")
-	msg, n, err := Decode(buf.Bytes())
+	msg, n, err := DecodeFrame(buf.Bytes())
 	if err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestEncodeDecodeSetAttr(t *testing.T) {
 	defer buf.Release()
 
 	buf.EncodeSetAttr(42, "class", "active")
-	msg, _, err := Decode(buf.Bytes())
+	msg, _, err := DecodeFrame(buf.Bytes())
 	if err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
@@ -52,12 +52,12 @@ func TestEncodeDecodeRemoveNode(t *testing.T) {
 	defer buf.Release()
 
 	buf.EncodeRemoveNode(99)
-	msg, n, err := Decode(buf.Bytes())
+	msg, n, err := DecodeFrame(buf.Bytes())
 	if err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
-	if n != 5 {
-		t.Fatalf("expected 5 bytes, got %d", n)
+	if n != 9 { // 4-byte frame prefix + 5-byte payload
+		t.Fatalf("expected 9 bytes, got %d", n)
 	}
 	if msg.Op != OpRemoveNode || msg.NodeID != 99 {
 		t.Fatalf("unexpected: op=0x%02x node=%d", msg.Op, msg.NodeID)
@@ -69,14 +69,17 @@ func TestEncodeDecodeInsertNode(t *testing.T) {
 	defer buf.Release()
 
 	attrs := map[string]string{"id": "btn1", "class": "primary"}
-	buf.EncodeInsertNode(1, 0, "button", attrs)
+	buf.EncodeInsertNode(50, 1, 0, "button", attrs)
 
-	msg, _, err := Decode(buf.Bytes())
+	msg, _, err := DecodeFrame(buf.Bytes())
 	if err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
 	if msg.Op != OpInsertNode {
 		t.Fatalf("expected OpInsertNode, got 0x%02x", msg.Op)
+	}
+	if msg.NodeID != 50 {
+		t.Fatalf("expected nodeID=50, got %d", msg.NodeID)
 	}
 	if msg.ParentID != 1 || msg.SiblingID != 0 {
 		t.Fatalf("expected parent=1 sibling=0, got %d %d", msg.ParentID, msg.SiblingID)
@@ -94,7 +97,7 @@ func TestEncodeDecodePushHistory(t *testing.T) {
 	defer buf.Release()
 
 	buf.EncodePushHistory("/dashboard/settings")
-	msg, _, err := Decode(buf.Bytes())
+	msg, _, err := DecodeFrame(buf.Bytes())
 	if err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
@@ -108,7 +111,7 @@ func TestEncodeDecodeClientIntent(t *testing.T) {
 	defer buf.Release()
 
 	buf.EncodeClientIntent(512, EventClick, []byte("x=10,y=20"))
-	msg, _, err := Decode(buf.Bytes())
+	msg, _, err := DecodeFrame(buf.Bytes())
 	if err != nil {
 		t.Fatalf("decode error: %v", err)
 	}
@@ -131,6 +134,36 @@ func BenchmarkEncodeUpdateText(b *testing.B) {
 	}
 }
 
+func TestMultiOpcodeRoundTrip(t *testing.T) {
+	buf := AcquireBuffer()
+	defer buf.Release()
+
+	buf.EncodeInsertNode(10, 1, 0, "div", nil)
+	buf.EncodeUpdateText(11, "hello")
+	buf.EncodeSetAttr(10, "class", "active")
+	buf.EncodeRemoveNode(99)
+
+	msgs, err := DecodeAll(buf.Bytes())
+	if err != nil {
+		t.Fatalf("DecodeAll error: %v", err)
+	}
+	if len(msgs) != 4 {
+		t.Fatalf("expected 4 messages, got %d", len(msgs))
+	}
+	if msgs[0].Op != OpInsertNode || msgs[0].NodeID != 10 {
+		t.Fatalf("msg[0]: expected OpInsertNode nodeID=10, got op=0x%02x nodeID=%d", msgs[0].Op, msgs[0].NodeID)
+	}
+	if msgs[1].Op != OpUpdateText || msgs[1].NodeID != 11 || msgs[1].Text != "hello" {
+		t.Fatalf("msg[1]: unexpected %+v", msgs[1])
+	}
+	if msgs[2].Op != OpSetAttr || msgs[2].Key != "class" || msgs[2].Value != "active" {
+		t.Fatalf("msg[2]: unexpected %+v", msgs[2])
+	}
+	if msgs[3].Op != OpRemoveNode || msgs[3].NodeID != 99 {
+		t.Fatalf("msg[3]: unexpected %+v", msgs[3])
+	}
+}
+
 func BenchmarkDecodeUpdateText(b *testing.B) {
 	buf := AcquireBuffer()
 	buf.EncodeUpdateText(1024, "Hello CBS")
@@ -139,6 +172,6 @@ func BenchmarkDecodeUpdateText(b *testing.B) {
 
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_, _, _ = Decode(data)
+		_, _, _ = DecodeFrame(data)
 	}
 }
