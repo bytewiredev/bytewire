@@ -140,6 +140,14 @@ func TestWithConnectionPool(t *testing.T) {
 	}
 }
 
+func TestWithSSR(t *testing.T) {
+	srv := NewServer(":0", nil, func(s *Session) *dom.Node { return nil }, WithSSR())
+
+	if !srv.ssrEnabled {
+		t.Fatal("expected ssrEnabled to be true")
+	}
+}
+
 func TestWithConnectionPool_Zero(t *testing.T) {
 	srv := NewServer(":0", nil, func(s *Session) *dom.Node { return nil }, WithConnectionPool(0))
 

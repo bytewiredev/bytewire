@@ -135,6 +135,19 @@ func TestTextFDirtyTracking(t *testing.T) {
 	}
 }
 
+func TestComputedFromListSignal(t *testing.T) {
+	ls := NewListSignal([]string{"a", "b"})
+	length := Computed(ls, func(items []string) int { return len(items) })
+
+	if length.Get() != 2 {
+		t.Fatalf("expected 2, got %d", length.Get())
+	}
+	ls.Append("c")
+	if length.Get() != 3 {
+		t.Fatalf("expected 3, got %d", length.Get())
+	}
+}
+
 func BenchmarkSignalSet(b *testing.B) {
 	s := NewSignal(0)
 	b.ReportAllocs()
