@@ -11,8 +11,10 @@ import (
 
 	"github.com/bytewiredev/bytewire/pkg/dom"
 	"github.com/bytewiredev/bytewire/pkg/metrics"
+	"github.com/bytewiredev/bytewire/pkg/plugin"
 	"github.com/bytewiredev/bytewire/pkg/protocol"
 	"github.com/bytewiredev/bytewire/pkg/ratelimit"
+	"github.com/bytewiredev/bytewire/pkg/webauthn"
 )
 
 // SessionID uniquely identifies a connected user session.
@@ -40,6 +42,16 @@ type Session struct {
 
 	limiter *ratelimit.Limiter
 	metrics *metrics.Defaults
+	plugins *plugin.Registry
+
+	credStore        CredentialStore
+	pendingChallenge []byte
+	rpID             string
+}
+
+// CredentialStore looks up WebAuthn credentials by ID.
+type CredentialStore interface {
+	LookupCredential(credentialID []byte) (*webauthn.Credential, error)
 }
 
 // Writer abstracts the binary transport. The engine writes opcode frames here.
@@ -62,7 +74,7 @@ func nextSessionID() SessionID {
 // NewSession creates a session bound to a transport writer.
 // If limiter is non-nil it will be used to throttle inbound intents.
 // If m is non-nil session events will be recorded as metrics.
-func NewSession(ctx context.Context, w Writer, logger *slog.Logger, limiter *ratelimit.Limiter, m *metrics.Defaults) *Session {
+func NewSession(ctx context.Context, w Writer, logger *slog.Logger, limiter *ratelimit.Limiter, m *metrics.Defaults, plugins *plugin.Registry) *Session {
 	ctx, cancel := context.WithCancel(ctx)
 	return &Session{
 		ID:      nextSessionID(),
@@ -72,6 +84,15 @@ func NewSession(ctx context.Context, w Writer, logger *slog.Logger, limiter *rat
 		logger:  logger,
 		limiter: limiter,
 		metrics: m,
+		plugins: plugins,
+	}
+}
+
+func (s *Session) hookCtx() plugin.HookContext {
+	return plugin.HookContext{
+		SessionID: uint64(s.ID),
+		Path:      s.currentPath,
+		Ctx:       s.ctx,
 	}
 }
 
@@ -108,11 +129,17 @@ func (s *Session) HandleIntent(data []byte) error {
 		return err
 	}
 
+	if err := s.plugins.RunIntent(s.hookCtx(), data); err != nil {
+		return nil
+	}
+
 	switch msg.Op {
 	case protocol.OpClientIntent:
 		return s.handleClientIntent(msg)
 	case protocol.OpClientNav:
 		return s.handleClientNav(msg.Text)
+	case protocol.OpClientAuth:
+		return s.handleClientAuth(msg)
 	default:
 		return nil
 	}
@@ -170,6 +197,59 @@ func (s *Session) handleClientNav(path string) error {
 	s.navHandler(path)
 
 	return s.flushDirtyNodes()
+}
+
+// BeginAuth initiates a WebAuthn authentication flow by sending a challenge to the client.
+func (s *Session) BeginAuth(rpID string) error {
+	challenge, err := webauthn.NewChallenge()
+	if err != nil {
+		return err
+	}
+	s.rpID = rpID
+	s.pendingChallenge = challenge
+
+	buf := protocol.AcquireBuffer()
+	defer buf.Release()
+	buf.EncodeAuthChallenge(rpID, challenge)
+	return s.writer.WriteMessage(buf.Bytes())
+}
+
+// handleClientAuth processes a client authentication assertion.
+func (s *Session) handleClientAuth(msg protocol.Message) error {
+	if s.credStore == nil || s.pendingChallenge == nil {
+		return nil
+	}
+
+	cred, err := s.credStore.LookupCredential(msg.CredentialID)
+	if err != nil || cred == nil {
+		buf := protocol.AcquireBuffer()
+		defer buf.Release()
+		buf.EncodeAuthResult(false, "")
+		return s.writer.WriteMessage(buf.Bytes())
+	}
+
+	req := webauthn.AssertionRequest{
+		RPID:      s.rpID,
+		Challenge: s.pendingChallenge,
+	}
+	resp := webauthn.AssertionResponse{
+		CredentialID:      msg.CredentialID,
+		AuthenticatorData: msg.AuthenticatorData,
+		ClientDataJSON:    msg.ClientDataJSON,
+		Signature:         msg.Signature,
+	}
+
+	result, verifyErr := webauthn.VerifyAssertion(req, resp, *cred)
+	s.pendingChallenge = nil
+
+	buf := protocol.AcquireBuffer()
+	defer buf.Release()
+	if verifyErr != nil || !result.Success {
+		buf.EncodeAuthResult(false, "")
+	} else {
+		buf.EncodeAuthResult(true, "authenticated")
+	}
+	return s.writer.WriteMessage(buf.Bytes())
 }
 
 // Close terminates the session.
@@ -356,7 +436,15 @@ func (s *Session) flushDirtyNodes() error {
 		n.Dirty = false
 	}
 
-	return s.writer.WriteMessage(buf.Bytes())
+	if err := s.writer.WriteMessage(buf.Bytes()); err != nil {
+		return err
+	}
+
+	if err := s.plugins.RunFlush(s.hookCtx()); err != nil {
+		s.logger.Warn("flush hook failed", "error", err)
+	}
+
+	return nil
 }
 
 // collectDirty gathers all nodes with Dirty=true.
