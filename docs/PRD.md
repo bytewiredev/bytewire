@@ -1,11 +1,11 @@
-# CBS — Continuous Binary Synchronization
+# Bytewire — Binary Wire Protocol UI Framework
 
 ## Product Requirements Document
 
-**Version:** 0.1.0
+**Version:** 0.4.0
 **Module:** `github.com/bytewiredev/bytewire`
 **Go:** 1.24+
-**Status:** Alpha
+**Status:** Beta
 **Last Updated:** 2026-03-04
 
 ---
@@ -32,9 +32,9 @@
 
 ## 1. Executive Summary & Vision
 
-### What is CBS?
+### What is Bytewire?
 
-CBS (Continuous Binary Synchronization) is a server-driven UI framework written in pure Go. It eliminates the traditional client-server split by rendering UI entirely on the server, serializing DOM mutations as compact binary opcodes, and streaming them over WebTransport (HTTP/3 + QUIC) to a thin WASM client that applies them directly to the browser DOM.
+Bytewire is a server-driven UI framework written in pure Go. It eliminates the traditional client-server split by rendering UI entirely on the server, serializing DOM mutations as compact binary opcodes, and streaming them over WebTransport (HTTP/3 + QUIC) to a thin WASM client that applies them directly to the browser DOM.
 
 ### The Problem
 
@@ -45,11 +45,11 @@ Modern web development suffers from an accidental complexity explosion:
 - **JavaScript monoculture** — Teams are forced into JavaScript/TypeScript regardless of backend language preference, doubling the language surface.
 - **Hydration theater** — SSR frameworks ship full HTML, then re-execute the same logic client-side to "hydrate" interactivity, wasting bandwidth and CPU.
 
-### The CBS Answer
+### The Bytewire Answer
 
-CBS takes a different approach:
+Bytewire takes a different approach:
 
-| Traditional SPA | CBS |
+| Traditional SPA | Bytewire |
 |---|---|
 | JSON API payloads | Binary opcodes (1-10 bytes per mutation) |
 | Client-side rendering | Server-side rendering with binary delta streaming |
@@ -81,7 +81,7 @@ CBS takes a different approach:
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│                      CBS Server (Go)                     │
+│                      Bytewire Server (Go)                     │
 │                                                          │
 │  ┌──────────┐  ┌──────────┐  ┌───────────┐              │
 │  │ Component │  │ Signal   │  │ Virtual   │              │
@@ -166,7 +166,7 @@ CBS takes a different approach:
 ### Package Dependency Graph
 
 ```
-cmd/cbs/main.go
+cmd/bytewire/main.go
     └── (standalone CLI)
 
 examples/counter/main.go
@@ -206,7 +206,7 @@ pkg/protocol
 
 ## 3. Binary Protocol Specification
 
-The CBS binary protocol is a compact instruction set for DOM mutations. Every message is a byte sequence designed for zero-copy parsing and minimal allocation.
+The Bytewire binary protocol is a compact instruction set for DOM mutations. Every message is a byte sequence designed for zero-copy parsing and minimal allocation.
 
 ### Design Goals
 
@@ -283,7 +283,7 @@ Insert a new element into the DOM tree.
 ```
 
 - **SiblingID = 0**: Append as last child of parent.
-- **ParentID = 0**: Append to document root (`#cbs-root`).
+- **ParentID = 0**: Append to document root (`#bw-root`).
 - **Tag length**: Single byte, max 255 characters.
 
 ##### `0x05` OpRemoveNode
@@ -402,9 +402,9 @@ Signal client-side navigation (popstate or link click).
 
 | Error | Value | Condition |
 |---|---|---|
-| `ErrShortRead` | `"cbs: unexpected end of message"` | Frame truncated — not enough bytes for the opcode's fixed prefix |
-| `ErrUnknownOp` | `"cbs: unknown opcode"` | Opcode byte not in the 0x01–0x11 range |
-| `ErrInvalidFrame` | `"cbs: invalid frame structure"` | Missing null separator in key-value opcodes |
+| `ErrShortRead` | `"bytewire: unexpected end of message"` | Frame truncated — not enough bytes for the opcode's fixed prefix |
+| `ErrUnknownOp` | `"bytewire: unknown opcode"` | Opcode byte not in the 0x01–0x11 range |
+| `ErrInvalidFrame` | `"bytewire: invalid frame structure"` | Missing null separator in key-value opcodes |
 
 ### Wire Format Examples
 
@@ -605,7 +605,7 @@ type Node struct {
 
 ### Element Builder API
 
-CBS uses the **functional options pattern** for element construction. Every HTML element has a corresponding Go function:
+Bytewire uses the **functional options pattern** for element construction. Every HTML element has a corresponding Go function:
 
 ```go
 // Create a div with attributes and children
@@ -676,7 +676,7 @@ dom.TextF(count, func(v int) string {
 
 ### Component Contract
 
-A CBS component is a function with the signature:
+A Bytewire component is a function with the signature:
 
 ```go
 type Component func(s *engine.Session) *dom.Node
@@ -805,7 +805,7 @@ srv.ListenAndServe(ctx)
 
 | Path | Purpose |
 |---|---|
-| `/cbs` | WebTransport upgrade endpoint — spawns a session per connection |
+| `/bw` | WebTransport upgrade endpoint — spawns a session per connection |
 | `/` | Serves the bootstrap HTML shell that loads the WASM client |
 
 #### Bootstrap HTML Shell
@@ -816,20 +816,20 @@ srv.ListenAndServe(ctx)
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CBS App</title>
+  <title>Bytewire App</title>
 </head>
 <body>
-  <div id="cbs-root"></div>
-  <script src="/cbs.js"></script>
+  <div id="bw-root"></div>
+  <script src="/bytewire.js"></script>
 </body>
 </html>
 ```
 
-The `#cbs-root` div is the mount point. The WASM client attaches here.
+The `#bw-root` div is the mount point. The WASM client attaches here.
 
 #### Connection Handling
 
-1. Browser requests `/cbs` with WebTransport upgrade.
+1. Browser requests `/bw` with WebTransport upgrade.
 2. Server calls `webtransport.Server.Upgrade()`.
 3. A new `Session` is created with a `wtWriter` adapter.
 4. The component is mounted: `sess.Mount(component)` renders the tree and sends initial opcodes.
@@ -929,26 +929,26 @@ The WASM client is a minimal Go binary compiled to WebAssembly. It has one job: 
 
 ```go
 func Start() {
-    root = document.Call("getElementById", "cbs-root")
-    js.Global().Set("__cbs_patch", js.FuncOf(patchFromJS))
+    root = document.Call("getElementById", "bw-root")
+    js.Global().Set("__bw_patch", js.FuncOf(patchFromJS))
     select {}  // Keep alive
 }
 ```
 
-1. Locates the `#cbs-root` element.
-2. Exports `__cbs_patch` to the JavaScript global scope.
+1. Locates the `#bw-root` element.
+2. Exports `__bw_patch` to the JavaScript global scope.
 3. Blocks forever (WASM modules exit when `main()` returns).
 
 ### JS Interop
 
-The bootstrap JavaScript (loaded as `/cbs.js`) establishes the WebTransport connection and calls `__cbs_patch(uint8Array)` when binary frames arrive.
+The bootstrap JavaScript (loaded as `/bytewire.js`) establishes the WebTransport connection and calls `__bw_patch(uint8Array)` when binary frames arrive.
 
 ```
 JavaScript                    Go (WASM)
     │                              │
     │  WebTransport.receive()      │
     │  ──────────────────────►     │
-    │  __cbs_patch(bytes)          │
+    │  __bw_patch(bytes)          │
     │                    patchFromJS()
     │                    js.CopyBytesToGo()
     │                    applyOpcodes()
@@ -996,7 +996,7 @@ This architecture is **structurally immune to XSS** — there is no code path wh
 
 ### Zero-Trust Model
 
-CBS operates on the principle that the client is untrusted:
+Bytewire operates on the principle that the client is untrusted:
 
 1. **Server owns all state** — The client has no local state to compromise. No `localStorage` tokens, no client-side business logic.
 2. **Client sends intents, not commands** — The client can only say "the user clicked node X" or "the user typed Y." The server decides what happens.
@@ -1044,7 +1044,7 @@ Server                          Browser (WASM)
 
 ### XSS Prevention
 
-| Attack Vector | CBS Mitigation |
+| Attack Vector | Bytewire Mitigation |
 |---|---|
 | `innerHTML` injection | Not used — all mutations via `textContent`, `setAttribute`, `createElement` |
 | Script injection via attributes | Attributes are set via `setAttribute`, not string concatenation |
@@ -1069,7 +1069,7 @@ Server                          Browser (WASM)
 
 ### Design Philosophy
 
-CBS provides a **type-safe, compile-time-checked CSS system**. Utility class names are Go constants — the compiler catches typos, and unused classes are eliminated by the CSS generator.
+Bytewire provides a **type-safe, compile-time-checked CSS system**. Utility class names are Go constants — the compiler catches typos, and unused classes are eliminated by the CSS generator.
 
 ### Class Type
 
@@ -1204,7 +1204,7 @@ css := style.Generate([]style.Class{
 
 Output:
 ```css
-/* CBS Generated Stylesheet - Zero Dead Code */
+/* Bytewire Generated Stylesheet - Zero Dead Code */
 .flex{display:flex}
 .bg-blue-500{background-color:#3b82f6}
 .text-white{color:#ffffff}
@@ -1224,13 +1224,13 @@ Emits all registered classes. Useful for development/debugging.
 
 ## 10. CLI Toolchain
 
-### Binary: `cmd/cbs`
+### Binary: `cmd/bytewire`
 
 ```
-CBS - Continuous Binary Synchronization
+Bytewire - Binary Wire Protocol UI Framework
 
 Usage:
-  cbs <command>
+  bytewire <command>
 
 Commands:
   build    Compile the WASM client module
@@ -1238,26 +1238,26 @@ Commands:
   version  Print version information
 ```
 
-### `cbs build`
+### `bytewire build`
 
 Compiles the WASM client:
 
 ```bash
-GOOS=js GOARCH=wasm go build -o dist/cbs.wasm ./pkg/wasm
+GOOS=js GOARCH=wasm go build -o dist/bytewire.wasm ./pkg/wasm
 ```
 
 Creates the `dist/` directory if it doesn't exist.
 
-### `cbs serve`
+### `bytewire serve`
 
 Starts the development server with hot reload (planned — currently a placeholder).
 
-### `cbs version`
+### `bytewire version`
 
-Prints the current CBS version:
+Prints the current Bytewire version:
 
 ```
-cbs v0.1.0
+bytewire v0.4.0
 ```
 
 ### Build Pipeline
@@ -1269,7 +1269,7 @@ Source (.go)                    Output
     │                              │
     └── WASM client  ◄──── GOOS=js GOARCH=wasm go build ./pkg/wasm
                                    │
-                              dist/cbs.wasm
+                              dist/bytewire.wasm
 ```
 
 The server binary and WASM client are built from the same Go module. They share the `protocol` package for opcode constants, ensuring client and server are always in sync.
@@ -1380,9 +1380,9 @@ const EventMouseLeave byte = 0x09
 #### Errors
 
 ```go
-var ErrShortRead    = errors.New("cbs: unexpected end of message")
-var ErrUnknownOp    = errors.New("cbs: unknown opcode")
-var ErrInvalidFrame = errors.New("cbs: invalid frame structure")
+var ErrShortRead    = errors.New("bytewire: unexpected end of message")
+var ErrUnknownOp    = errors.New("bytewire: unknown opcode")
+var ErrInvalidFrame = errors.New("bytewire: invalid frame structure")
 ```
 
 #### Types
@@ -1619,7 +1619,7 @@ func (q *OfflineQueue) Len() int
 
 ### Binary Protocol vs JSON
 
-| Metric | CBS Binary | JSON Equivalent |
+| Metric | Bytewire Binary | JSON Equivalent |
 |---|---|---|
 | Text update "Count: 42" | **15 bytes** | ~45 bytes (`{"op":"updateText","nodeId":1024,"text":"Count: 42"}`) |
 | Set attribute | **6 + key + value** | ~50+ bytes with JSON overhead |
@@ -1701,8 +1701,8 @@ For a local development setup (RTT ≈ 0): **sub-frame latency** (~16ms total).
 | `OpBatch` client support | Planned | Process batched opcodes atomically in WASM interpreter |
 | `OpReplaceText` client support | Planned | Surgical text replacement in WASM |
 | Signal-driven diff loop | Planned | Automatic diff cycle when signals fire (currently manual) |
-| `cbs serve` implementation | Planned | Development server with file watching and hot reload |
-| Actual WASM compilation | Planned | `cbs build` currently creates `dist/` but doesn't invoke `go build` |
+| `bytewire serve` implementation | Planned | Development server with file watching and hot reload |
+| Actual WASM compilation | Planned | `bytewire build` currently creates `dist/` but doesn't invoke `go build` |
 | Node ID synchronization | Planned | Server-assigned IDs transmitted to WASM client via `OpInsertNode` |
 
 ### v0.3.0 — Developer Experience
@@ -1711,7 +1711,7 @@ For a local development setup (RTT ≈ 0): **sub-frame latency** (~16ms total).
 |---|---|
 | Hot reload | File watcher triggers rebuild + reconnect |
 | Error overlay | Server errors displayed in browser |
-| DevTools integration | Custom browser panel for CBS state inspection |
+| DevTools integration | Custom browser panel for Bytewire state inspection |
 | Component library | Pre-built UI components (forms, tables, modals) |
 | Router package | Declarative server-side routing with `OpPushHistory` |
 
@@ -1743,8 +1743,8 @@ For a local development setup (RTT ≈ 0): **sub-frame latency** (~16ms total).
 3. **Single-frame parsing** — The WASM `OpUpdateText` handler reads until end-of-data, which fails inside batch frames.
 4. **No `OpBatch` client handling** — Batch opcode (`0x09`) is not implemented in the WASM interpreter.
 5. **No `OpReplaceText` client handling** — Opcode `0x06` is not implemented in the WASM interpreter.
-6. **`cbs build` is a stub** — Creates `dist/` directory but does not actually invoke the Go compiler.
-7. **`cbs serve` is a stub** — Prints a TODO message.
+6. **`bytewire build` is a stub** — Creates `dist/` directory but does not actually invoke the Go compiler.
+7. **`bytewire serve` is a stub** — Prints a TODO message.
 8. **No WebSocket fallback** — WebTransport requires HTTP/3; older browsers have no path.
 
 ---
@@ -1753,7 +1753,7 @@ For a local development setup (RTT ≈ 0): **sub-frame latency** (~16ms total).
 
 | Term | Definition |
 |---|---|
-| **CBS** | Continuous Binary Synchronization — the framework name and protocol philosophy |
+| **Bytewire** | Continuous Binary Synchronization — the framework name and protocol philosophy |
 | **Opcode** | A single-byte instruction identifier (e.g., `0x01` = UpdateText) that begins every binary frame |
 | **Signal** | A reactive state container (`Signal[T]`) that notifies observers when its value changes |
 | **Computed Signal** | A derived `Signal[U]` that automatically recomputes from a source `Signal[T]` |
@@ -1772,10 +1772,10 @@ For a local development setup (RTT ≈ 0): **sub-frame latency** (~16ms total).
 | **QUIC** | A UDP-based transport protocol providing multiplexed streams with TLS 1.3 |
 | **Passkey** | A WebAuthn credential stored on a hardware authenticator or platform |
 | **Dead-Code Elimination** | The CSS generator only emits rules for classes actually referenced in code |
-| **Zero Hydration** | CBS never re-executes server logic on the client — the WASM client only patches the DOM |
+| **Zero Hydration** | Bytewire never re-executes server logic on the client — the WASM client only patches the DOM |
 | **Backpressure** | The broadcast system's policy of dropping messages to slow subscribers |
-| **`#cbs-root`** | The DOM element (`<div id="cbs-root">`) where the WASM client mounts the application |
+| **`#bw-root`** | The DOM element (`<div id="bw-root">`) where the WASM client mounts the application |
 
 ---
 
-*CBS is open source software. Module: `github.com/bytewiredev/bytewire`*
+*Bytewire is open source software. Module: `github.com/bytewiredev/bytewire`*
