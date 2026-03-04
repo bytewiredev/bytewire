@@ -345,6 +345,37 @@ func showErrorOverlay(msg string) {
 	}), 10000)
 }
 
+// hydrateExistingDOM scans the DOM for elements with data-bw-id attributes
+// (from SSR) and pre-populates the nodes map. This allows the WASM client
+// to reuse existing DOM nodes instead of creating duplicates.
+func hydrateExistingDOM() {
+	nodeList := document.Call("querySelectorAll", "[data-bw-id]")
+	length := nodeList.Get("length").Int()
+	if length == 0 {
+		return
+	}
+
+	for i := 0; i < length; i++ {
+		el := nodeList.Call("item", i)
+		attr := el.Call("getAttribute", "data-bw-id")
+		if attr.IsNull() || attr.IsUndefined() {
+			continue
+		}
+		idStr := attr.String()
+		var id uint32
+		for _, c := range idStr {
+			if c >= '0' && c <= '9' {
+				id = id*10 + uint32(c-'0')
+			}
+		}
+		if id > 0 {
+			nodes[id] = el
+		}
+	}
+
+	fmt.Printf("bytewire: hydrated %d SSR nodes\n", length)
+}
+
 // cleanupDescendants removes all descendant nodes from the nodes map.
 func cleanupDescendants(el js.Value) {
 	children := el.Get("children")

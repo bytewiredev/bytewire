@@ -13,6 +13,7 @@ import (
 
 	"github.com/bytewiredev/bytewire/pkg/devcert"
 	"github.com/bytewiredev/bytewire/pkg/metrics"
+	"github.com/bytewiredev/bytewire/pkg/protocol"
 	"github.com/bytewiredev/bytewire/pkg/ratelimit"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/webtransport-go"
@@ -298,6 +299,16 @@ func (s *Server) handleConnection(ctx context.Context, wtSession *webtransport.S
 		s.metrics.SessionsActive.Inc()
 	}
 	s.logger.Info("session connected", "sessionID", sess.ID)
+
+	// Send protocol version handshake.
+	helloBuf := protocol.AcquireBuffer()
+	helloBuf.EncodeHello(protocol.ProtocolMajor, protocol.ProtocolMinor)
+	if err := w.WriteMessage(helloBuf.Bytes()); err != nil {
+		helloBuf.Release()
+		s.logger.Error("failed to send hello", "error", err)
+		return
+	}
+	helloBuf.Release()
 
 	if err := sess.Mount(s.component); err != nil {
 		s.logger.Error("mount failed", "error", err)

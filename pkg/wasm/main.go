@@ -39,6 +39,9 @@ func Start() {
 		return
 	}
 
+	// Hydrate any SSR-rendered nodes before connecting.
+	hydrateExistingDOM()
+
 	root.Set("textContent", "Connecting…")
 	fmt.Println("bytewire: WASM client initialized")
 
