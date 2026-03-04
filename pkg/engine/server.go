@@ -13,6 +13,8 @@ import (
 
 	"github.com/bytewiredev/bytewire/pkg/devcert"
 	"github.com/bytewiredev/bytewire/pkg/metrics"
+	"github.com/bytewiredev/bytewire/pkg/plugin"
+	"github.com/bytewiredev/bytewire/pkg/protocol"
 	"github.com/bytewiredev/bytewire/pkg/ratelimit"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/webtransport-go"
@@ -51,6 +53,12 @@ type Server struct {
 	// Metrics registry and default metric handles.
 	metricsRegistry *metrics.Registry
 	metrics         *metrics.Defaults
+
+	// Plugin lifecycle hooks.
+	plugins *plugin.Registry
+
+	// WebAuthn credential store for passkey authentication.
+	credStore CredentialStore
 }
 
 // ServerOption configures the Server.
@@ -107,6 +115,16 @@ func WithConnectionPool(size int) ServerOption {
 // transport for browsers that do not support WebTransport.
 func WithWebSocketFallback() ServerOption {
 	return func(s *Server) { s.wsFallback = true }
+}
+
+// WithPlugins attaches a plugin registry to the server.
+func WithPlugins(r *plugin.Registry) ServerOption {
+	return func(s *Server) { s.plugins = r }
+}
+
+// WithCredentialStore sets the WebAuthn credential store for passkey authentication.
+func WithCredentialStore(cs CredentialStore) ServerOption {
+	return func(s *Server) { s.credStore = cs }
 }
 
 // WithMetrics attaches a metrics registry to the server. The default Bytewire
@@ -287,7 +305,8 @@ func (s *Server) handleConnection(ctx context.Context, wtSession *webtransport.S
 	}
 
 	w := &wtWriter{session: wtSession}
-	sess := NewSession(ctx, w, s.logger, s.newLimiter(), s.metrics)
+	sess := NewSession(ctx, w, s.logger, s.newLimiter(), s.metrics, s.plugins)
+	sess.credStore = s.credStore
 
 	s.mu.Lock()
 	s.sessions[sess.ID] = sess
@@ -299,6 +318,28 @@ func (s *Server) handleConnection(ctx context.Context, wtSession *webtransport.S
 	}
 	s.logger.Info("session connected", "sessionID", sess.ID)
 
+	if err := s.plugins.RunConnect(sess.hookCtx()); err != nil {
+		s.logger.Warn("connect hook rejected session", "error", err, "sessionID", sess.ID)
+		s.mu.Lock()
+		delete(s.sessions, sess.ID)
+		s.mu.Unlock()
+		sess.Close()
+		if s.metrics != nil {
+			s.metrics.SessionsActive.Dec()
+		}
+		return
+	}
+
+	// Send protocol version handshake.
+	helloBuf := protocol.AcquireBuffer()
+	helloBuf.EncodeHello(protocol.ProtocolMajor, protocol.ProtocolMinor)
+	if err := w.WriteMessage(helloBuf.Bytes()); err != nil {
+		helloBuf.Release()
+		s.logger.Error("failed to send hello", "error", err)
+		return
+	}
+	helloBuf.Release()
+
 	if err := sess.Mount(s.component); err != nil {
 		s.logger.Error("mount failed", "error", err)
 		sess.Close()
@@ -308,9 +349,14 @@ func (s *Server) handleConnection(ctx context.Context, wtSession *webtransport.S
 		return
 	}
 
+	if err := s.plugins.RunMount(sess.hookCtx()); err != nil {
+		s.logger.Error("mount hook failed", "error", err)
+	}
+
 	// Read client intents from bidirectional stream
 	go func() {
 		defer func() {
+			s.plugins.RunDisconnect(sess.hookCtx())
 			s.mu.Lock()
 			delete(s.sessions, sess.ID)
 			s.mu.Unlock()
@@ -406,7 +452,8 @@ func (s *Server) handleWebSocket(conn *websocket.Conn) {
 	}
 
 	w := &wsWriter{conn: conn}
-	sess := NewSession(context.Background(), w, s.logger, s.newLimiter(), s.metrics)
+	sess := NewSession(context.Background(), w, s.logger, s.newLimiter(), s.metrics, s.plugins)
+	sess.credStore = s.credStore
 
 	s.mu.Lock()
 	s.sessions[sess.ID] = sess
@@ -418,6 +465,29 @@ func (s *Server) handleWebSocket(conn *websocket.Conn) {
 	}
 	s.logger.Info("WebSocket session connected", "sessionID", sess.ID)
 
+	if err := s.plugins.RunConnect(sess.hookCtx()); err != nil {
+		s.logger.Warn("connect hook rejected session", "error", err, "sessionID", sess.ID)
+		s.mu.Lock()
+		delete(s.sessions, sess.ID)
+		s.mu.Unlock()
+		sess.Close()
+		if s.metrics != nil {
+			s.metrics.SessionsActive.Dec()
+		}
+		return
+	}
+
+	// Send protocol version handshake.
+	helloBuf := protocol.AcquireBuffer()
+	helloBuf.EncodeHello(protocol.ProtocolMajor, protocol.ProtocolMinor)
+	if err := w.WriteMessage(helloBuf.Bytes()); err != nil {
+		helloBuf.Release()
+		s.logger.Error("failed to send hello", "error", err)
+		conn.Close()
+		return
+	}
+	helloBuf.Release()
+
 	if err := sess.Mount(s.component); err != nil {
 		s.logger.Error("mount failed", "error", err)
 		sess.Close()
@@ -427,8 +497,13 @@ func (s *Server) handleWebSocket(conn *websocket.Conn) {
 		return
 	}
 
+	if err := s.plugins.RunMount(sess.hookCtx()); err != nil {
+		s.logger.Error("mount hook failed", "error", err)
+	}
+
 	// Read length-prefixed frames from WebSocket messages.
 	defer func() {
+		s.plugins.RunDisconnect(sess.hookCtx())
 		s.mu.Lock()
 		delete(s.sessions, sess.ID)
 		s.mu.Unlock()

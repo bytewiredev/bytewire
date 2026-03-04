@@ -50,6 +50,14 @@ const (
 	// OpDevToolsState sends a JSON state snapshot to the client for DevTools inspection.
 	// Format: [0x0B][4B JSON length][JSON bytes]
 	OpDevToolsState byte = 0x0B
+
+	// OpAuthChallenge sends an authentication challenge to the client.
+	// Format: [0x0C][1B rpID length][rpID bytes][32B challenge]
+	OpAuthChallenge byte = 0x0C
+
+	// OpAuthResult sends the authentication result to the client.
+	// Format: [0x0D][1B success (0/1)][token bytes]
+	OpAuthResult byte = 0x0D
 )
 
 // Client -> Server opcodes (0x10 - 0x1F)
@@ -61,6 +69,10 @@ const (
 	// OpClientNav signals that the user navigated (popstate / link click).
 	// Format: [0x11][UTF-8 path bytes]
 	OpClientNav byte = 0x11
+
+	// OpClientAuth sends authentication assertion data from the client.
+	// Format: [0x13][2B credID len][credID][2B authData len][authData][2B clientDataJSON len][clientDataJSON][2B sig len][sig]
+	OpClientAuth byte = 0x13
 )
 
 // EventType constants for OpClientIntent payloads.

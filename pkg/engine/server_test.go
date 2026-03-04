@@ -20,7 +20,7 @@ func newTestServer() *Server {
 }
 
 func newTestSession() *Session {
-	return NewSession(context.Background(), &mockWriter{}, slog.Default(), nil, nil)
+	return NewSession(context.Background(), &mockWriter{}, slog.Default(), nil, nil, nil)
 }
 
 func TestSessionRegistry_RegisterAndLookup(t *testing.T) {

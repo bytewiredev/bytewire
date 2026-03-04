@@ -229,6 +229,50 @@ func (b *Buffer) EncodeDevToolsState(jsonData []byte) {
 	b.endFrame(off)
 }
 
+// EncodeHello writes an OpHello instruction.
+// Format: [0x00][1B major][1B minor]
+func (b *Buffer) EncodeHello(major, minor byte) {
+	off := b.beginFrame()
+	b.writeByte(OpHello)
+	b.writeByte(major)
+	b.writeByte(minor)
+	b.endFrame(off)
+}
+
+// EncodeClientHello writes an OpClientHello instruction.
+// Format: [0x12][1B major][1B minor]
+func (b *Buffer) EncodeClientHello(major, minor byte) {
+	off := b.beginFrame()
+	b.writeByte(OpClientHello)
+	b.writeByte(major)
+	b.writeByte(minor)
+	b.endFrame(off)
+}
+
+// EncodeAuthChallenge writes an OpAuthChallenge instruction.
+func (b *Buffer) EncodeAuthChallenge(rpID string, challenge []byte) {
+	off := b.beginFrame()
+	b.writeByte(OpAuthChallenge)
+	rpIDBytes := []byte(rpID)
+	b.writeByte(byte(len(rpIDBytes)))
+	b.writeBytes(rpIDBytes)
+	b.writeBytes(challenge)
+	b.endFrame(off)
+}
+
+// EncodeAuthResult writes an OpAuthResult instruction.
+func (b *Buffer) EncodeAuthResult(success bool, token string) {
+	off := b.beginFrame()
+	b.writeByte(OpAuthResult)
+	if success {
+		b.writeByte(1)
+	} else {
+		b.writeByte(0)
+	}
+	b.writeBytes([]byte(token))
+	b.endFrame(off)
+}
+
 // countFrames counts the number of length-prefixed frames in data.
 func countFrames(data []byte) uint32 {
 	var n uint32
