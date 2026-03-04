@@ -1,4 +1,4 @@
-// Package style provides type-safe CSS generation for CBS components.
+// Package style provides type-safe CSS generation for Bytewire components.
 // Styling rules are Go constants — the compiler catches invalid styles at build time.
 package style
 

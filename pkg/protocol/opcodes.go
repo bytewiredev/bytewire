@@ -1,4 +1,4 @@
-// Package protocol defines the CBS binary instruction set for DOM mutations.
+// Package protocol defines the Bytewire binary instruction set for DOM mutations.
 //
 // Every message is a compact byte sequence: [1B Opcode][4B NodeID][Payload].
 // This eliminates JSON parsing overhead and enables zero-copy DOM patching.
@@ -19,7 +19,7 @@ const (
 	OpRemoveAttr byte = 0x03
 
 	// OpInsertNode inserts a new element into the DOM tree.
-	// Format: [0x04][4B ParentID][4B SiblingID][1B TagLen][tag bytes][2B AttrCount][attrs...]
+	// Format: [0x04][4B NodeID][4B ParentID][4B SiblingID][1B TagLen][tag bytes][2B AttrCount][attrs...]
 	// SiblingID of 0 means append as last child.
 	OpInsertNode byte = 0x04
 

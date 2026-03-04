@@ -1,6 +1,6 @@
 package dom
 
-import "github.com/cbsframework/cbs/pkg/protocol"
+import "github.com/bytewiredev/bytewire/pkg/protocol"
 
 // Diff compares an old and new node tree and emits binary opcodes
 // representing the minimal set of DOM mutations needed.
@@ -68,6 +68,11 @@ func Diff(buf *protocol.Buffer, old, next *Node) {
 // emitInsert encodes a full node insertion, recursing into children.
 func emitInsert(buf *protocol.Buffer, n *Node) {
 	if n.Type == TextNode {
+		parentID := uint32(0)
+		if n.Parent != nil {
+			parentID = uint32(n.Parent.ID)
+		}
+		buf.EncodeInsertNode(uint32(n.ID), parentID, 0, "#text", nil)
 		buf.EncodeUpdateText(uint32(n.ID), n.Text)
 		return
 	}
@@ -76,7 +81,7 @@ func emitInsert(buf *protocol.Buffer, n *Node) {
 	if n.Parent != nil {
 		parentID = uint32(n.Parent.ID)
 	}
-	buf.EncodeInsertNode(parentID, 0, n.Tag, n.Attrs)
+	buf.EncodeInsertNode(uint32(n.ID), parentID, 0, n.Tag, n.Attrs)
 
 	for _, child := range n.Children {
 		emitInsert(buf, child)

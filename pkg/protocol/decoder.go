@@ -7,12 +7,12 @@ import (
 )
 
 var (
-	ErrShortRead    = errors.New("cbs: unexpected end of message")
-	ErrUnknownOp    = errors.New("cbs: unknown opcode")
-	ErrInvalidFrame = errors.New("cbs: invalid frame structure")
+	ErrShortRead    = errors.New("bytewire: unexpected end of message")
+	ErrUnknownOp    = errors.New("bytewire: unknown opcode")
+	ErrInvalidFrame = errors.New("bytewire: invalid frame structure")
 )
 
-// Message is a decoded CBS binary instruction.
+// Message is a decoded Bytewire binary instruction.
 type Message struct {
 	Op        byte
 	NodeID    uint32
@@ -25,9 +25,12 @@ type Message struct {
 	Text      string   // OpUpdateText, OpPushHistory, OpClientNav
 	EventType byte     // OpClientIntent
 	Payload   []byte   // OpClientIntent
+	Offset    uint32   // OpReplaceText
+	Length    uint32   // OpReplaceText
+	Children  []Message // OpBatch
 }
 
-// Decode reads a single CBS message from raw bytes and returns
+// Decode reads a single Bytewire message from raw bytes and returns
 // the decoded Message plus the number of bytes consumed.
 func Decode(data []byte) (Message, int, error) {
 	if len(data) < 1 {
@@ -70,12 +73,13 @@ func Decode(data []byte) (Message, int, error) {
 		return msg, len(data), nil
 
 	case OpInsertNode:
-		if len(data) < 10 {
+		if len(data) < 14 {
 			return msg, 0, ErrShortRead
 		}
-		msg.ParentID = binary.BigEndian.Uint32(data[1:5])
-		msg.SiblingID = binary.BigEndian.Uint32(data[5:9])
-		pos = 9
+		msg.NodeID = binary.BigEndian.Uint32(data[1:5])
+		msg.ParentID = binary.BigEndian.Uint32(data[5:9])
+		msg.SiblingID = binary.BigEndian.Uint32(data[9:13])
+		pos = 13
 
 		// Tag
 		if pos >= len(data) {
@@ -130,6 +134,16 @@ func Decode(data []byte) (Message, int, error) {
 		msg.NodeID = binary.BigEndian.Uint32(data[1:5])
 		return msg, 5, nil
 
+	case OpReplaceText:
+		if len(data) < 13 {
+			return msg, 0, ErrShortRead
+		}
+		msg.NodeID = binary.BigEndian.Uint32(data[1:5])
+		msg.Offset = binary.BigEndian.Uint32(data[5:9])
+		msg.Length = binary.BigEndian.Uint32(data[9:13])
+		msg.Text = string(data[13:])
+		return msg, len(data), nil
+
 	case OpSetStyle:
 		if len(data) < 5 {
 			return msg, 0, ErrShortRead
@@ -148,6 +162,18 @@ func Decode(data []byte) (Message, int, error) {
 		msg.Text = string(data[1:])
 		return msg, len(data), nil
 
+	case OpBatch:
+		if len(data) < 5 {
+			return msg, 0, ErrShortRead
+		}
+		count := binary.BigEndian.Uint32(data[1:5])
+		children, err := decodeN(data[5:], count)
+		if err != nil {
+			return msg, 0, err
+		}
+		msg.Children = children
+		return msg, len(data), nil
+
 	case OpClientIntent:
 		if len(data) < 6 {
 			return msg, 0, ErrShortRead
@@ -164,6 +190,54 @@ func Decode(data []byte) (Message, int, error) {
 	default:
 		return msg, 0, fmt.Errorf("%w: 0x%02x", ErrUnknownOp, msg.Op)
 	}
+}
+
+// DecodeFrame reads a 4-byte length prefix, then decodes the opcode frame
+// within that boundary. Returns the decoded message and total bytes consumed
+// (including the 4-byte prefix).
+func DecodeFrame(data []byte) (Message, int, error) {
+	if len(data) < 4 {
+		return Message{}, 0, ErrShortRead
+	}
+	frameLen := int(binary.BigEndian.Uint32(data[0:4]))
+	if len(data) < 4+frameLen {
+		return Message{}, 0, ErrShortRead
+	}
+	msg, _, err := Decode(data[4 : 4+frameLen])
+	if err != nil {
+		return msg, 0, err
+	}
+	return msg, 4 + frameLen, nil
+}
+
+// DecodeAll reads all length-prefixed frames from data and returns them.
+func DecodeAll(data []byte) ([]Message, error) {
+	var msgs []Message
+	pos := 0
+	for pos < len(data) {
+		msg, n, err := DecodeFrame(data[pos:])
+		if err != nil {
+			return msgs, err
+		}
+		msgs = append(msgs, msg)
+		pos += n
+	}
+	return msgs, nil
+}
+
+// decodeN decodes exactly n length-prefixed frames from data.
+func decodeN(data []byte, n uint32) ([]Message, error) {
+	msgs := make([]Message, 0, n)
+	pos := 0
+	for i := uint32(0); i < n; i++ {
+		m, consumed, err := DecodeFrame(data[pos:])
+		if err != nil {
+			return msgs, err
+		}
+		msgs = append(msgs, m)
+		pos += consumed
+	}
+	return msgs, nil
 }
 
 func findNull(data []byte) int {

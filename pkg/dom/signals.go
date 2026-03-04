@@ -1,4 +1,4 @@
-// Package dom provides the developer-facing API for building CBS UIs in pure Go.
+// Package dom provides the developer-facing API for building Bytewire UIs in pure Go.
 package dom
 
 import (
@@ -124,4 +124,104 @@ func Computed[T comparable, U comparable](source *Signal[T], derive func(T) U) *
 		computed.Set(derive(v))
 	})
 	return computed
+}
+
+// ListSignal is a reactive container for slices. Unlike Signal[T], it does
+// not require comparable elements and always notifies on Set (since slices
+// cannot be compared with ==).
+type ListSignal[T any] struct {
+	id        SignalID
+	mu        sync.RWMutex
+	items     []T
+	observers []func([]T)
+}
+
+// NewListSignal creates a ListSignal with an initial slice.
+func NewListSignal[T any](initial []T) *ListSignal[T] {
+	cp := make([]T, len(initial))
+	copy(cp, initial)
+	return &ListSignal[T]{
+		id:    nextSignalID(),
+		items: cp,
+	}
+}
+
+// Get returns a defensive copy of the current items.
+func (s *ListSignal[T]) Get() []T {
+	s.mu.RLock()
+	cp := make([]T, len(s.items))
+	copy(cp, s.items)
+	s.mu.RUnlock()
+	return cp
+}
+
+// Set replaces the items and notifies all observers.
+func (s *ListSignal[T]) Set(items []T) {
+	s.mu.Lock()
+	s.items = make([]T, len(items))
+	copy(s.items, items)
+	observers := make([]func([]T), len(s.observers))
+	copy(observers, s.observers)
+	s.mu.Unlock()
+
+	snapshot := s.Get()
+	for _, fn := range observers {
+		if fn != nil {
+			fn(snapshot)
+		}
+	}
+}
+
+// Append adds an item and notifies observers.
+func (s *ListSignal[T]) Append(item T) {
+	s.mu.Lock()
+	s.items = append(s.items, item)
+	observers := make([]func([]T), len(s.observers))
+	copy(observers, s.observers)
+	s.mu.Unlock()
+
+	snapshot := s.Get()
+	for _, fn := range observers {
+		if fn != nil {
+			fn(snapshot)
+		}
+	}
+}
+
+// Update applies a transform function to the current items.
+func (s *ListSignal[T]) Update(fn func([]T) []T) {
+	s.mu.Lock()
+	s.items = fn(s.items)
+	observers := make([]func([]T), len(s.observers))
+	copy(observers, s.observers)
+	s.mu.Unlock()
+
+	snapshot := s.Get()
+	for _, fn := range observers {
+		if fn != nil {
+			fn(snapshot)
+		}
+	}
+}
+
+// ID returns the signal's unique identifier.
+func (s *ListSignal[T]) ID() SignalID {
+	return s.id
+}
+
+// Observe registers a callback invoked whenever the items change.
+// Returns an unsubscribe function.
+func (s *ListSignal[T]) Observe(fn func([]T)) func() {
+	s.mu.Lock()
+	s.observers = append(s.observers, fn)
+	idx := len(s.observers) - 1
+	s.mu.Unlock()
+
+	return func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if idx < len(s.observers) {
+			s.observers[idx] = nil
+		}
+	}
 }

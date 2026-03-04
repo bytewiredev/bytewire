@@ -3,22 +3,32 @@ package engine
 import (
 	"context"
 	"crypto/tls"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"sync"
 
+	"github.com/bytewiredev/bytewire/pkg/devcert"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/webtransport-go"
 )
 
-// Server is the CBS WebTransport server that accepts connections
+// Server is the Bytewire WebTransport server that accepts connections
 // and spawns per-user sessions.
 type Server struct {
-	addr      string
-	tlsConfig *tls.Config
-	component Component
-	logger    *slog.Logger
+	addr        string
+	tlsConfig   *tls.Config
+	component   Component
+	logger      *slog.Logger
+	checkOrigin func(r *http.Request) bool
+
+	// Options for the integrated page server.
+	staticDir string
+	css       string
+	httpAddr  string
 
 	mu       sync.Mutex
 	sessions map[SessionID]*Session
@@ -33,14 +43,37 @@ func WithLogger(l *slog.Logger) ServerOption {
 	return func(s *Server) { s.logger = l }
 }
 
-// NewServer creates a CBS server listening on addr.
-// The tlsConfig must include a valid certificate for WebTransport (HTTP/3).
+// WithCheckOrigin sets a custom origin check for WebTransport upgrades.
+// By default, webtransport-go enforces same-origin. Use this to allow
+// cross-origin connections (e.g. when the static server runs on a different port).
+func WithCheckOrigin(fn func(r *http.Request) bool) ServerOption {
+	return func(s *Server) { s.checkOrigin = fn }
+}
+
+// WithStaticDir serves files from the given directory under /static/.
+func WithStaticDir(path string) ServerOption {
+	return func(s *Server) { s.staticDir = path }
+}
+
+// WithCSS injects CSS into the HTML shell's <style> tag.
+func WithCSS(css string) ServerOption {
+	return func(s *Server) { s.css = css }
+}
+
+// WithHTTPAddr sets the plain HTTP address for the page server (default ":8080").
+func WithHTTPAddr(addr string) ServerOption {
+	return func(s *Server) { s.httpAddr = addr }
+}
+
+// NewServer creates a Bytewire server listening on addr.
+// If tlsConfig is nil, ListenAndServe will auto-generate an ephemeral dev cert.
 func NewServer(addr string, tlsConfig *tls.Config, comp Component, opts ...ServerOption) *Server {
 	s := &Server{
 		addr:      addr,
 		tlsConfig: tlsConfig,
 		component: comp,
 		logger:    slog.Default(),
+		httpAddr:  ":8080",
 		sessions:  make(map[SessionID]*Session),
 	}
 	for _, opt := range opts {
@@ -49,35 +82,103 @@ func NewServer(addr string, tlsConfig *tls.Config, comp Component, opts ...Serve
 	return s
 }
 
-// ListenAndServe starts the HTTP/3 server with WebTransport upgrade support.
-func (s *Server) ListenAndServe(ctx context.Context) error {
-	mux := http.NewServeMux()
-
+// Setup registers the WebTransport /bw handler on the given mux and
+// initializes the internal webtransport.Server. Call this when you want
+// to control the mux and server lifecycle yourself.
+func (s *Server) Setup(mux *http.ServeMux) {
 	s.wt = &webtransport.Server{
-		H3: http3.Server{
+		H3: &http3.Server{
 			Addr:      s.addr,
-			TLSConfig: s.tlsConfig,
+			TLSConfig: http3.ConfigureTLSConfig(s.tlsConfig),
 			Handler:   mux,
 		},
+		CheckOrigin: s.checkOrigin,
 	}
+	webtransport.ConfigureHTTP3Server(s.wt.H3)
 
-	mux.HandleFunc("/cbs", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/bw", func(w http.ResponseWriter, r *http.Request) {
 		sess, err := s.wt.Upgrade(w, r)
 		if err != nil {
 			s.logger.Error("webtransport upgrade failed", "error", err)
 			return
 		}
-		s.handleConnection(ctx, sess)
+		s.handleConnection(r.Context(), sess)
 	})
+}
 
-	// Serve a minimal HTML page that loads the WASM client
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+// ServeUDP starts the WebTransport server on an existing UDP connection.
+// Setup must be called first.
+func (s *Server) ServeUDP(conn net.PacketConn) error {
+	s.logger.Info("Bytewire server starting (UDP)", "addr", s.addr)
+	return s.wt.Serve(conn)
+}
+
+// ListenAndServe starts both the WebTransport (UDP) and plain HTTP (TCP) servers.
+// If no TLS config was provided, an ephemeral dev cert is auto-generated.
+// The plain HTTP server serves the HTML shell, static files, and WASM bootstrap.
+// Blocks until ctx is cancelled, then shuts down both servers.
+func (s *Server) ListenAndServe(ctx context.Context) error {
+	// Auto-generate cert if none provided.
+	var certHashJS string
+	if s.tlsConfig == nil {
+		cert, hash, err := devcert.Generate()
+		if err != nil {
+			return fmt.Errorf("devcert: %w", err)
+		}
+		s.tlsConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
+		certHashJS = devcert.FormatHashJS(hash)
+		s.logger.Info("dev cert generated", "sha256", fmt.Sprintf("%x", hash))
+	}
+
+	// Cross-origin is needed because the page server and WebTransport are on different ports.
+	if s.checkOrigin == nil {
+		s.checkOrigin = func(r *http.Request) bool { return true }
+	}
+
+	// Setup WebTransport on a shared mux.
+	wtMux := http.NewServeMux()
+	s.Setup(wtMux)
+
+	// Start WebTransport UDP server.
+	udpAddr, err := net.ResolveUDPAddr("udp", s.addr)
+	if err != nil {
+		return fmt.Errorf("resolve UDP: %w", err)
+	}
+	udpConn, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		return fmt.Errorf("listen UDP: %w", err)
+	}
+	go func() {
+		if err := s.ServeUDP(udpConn); err != nil {
+			s.logger.Error("WebTransport server error", "error", err)
+		}
+	}()
+
+	// Build and serve HTML shell on plain HTTP.
+	shell := buildShellHTML(certHashJS, s.css, s.addr)
+	httpMux := http.NewServeMux()
+	httpMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, shellHTML)
+		fmt.Fprint(w, shell)
 	})
+	if s.staticDir != "" {
+		httpMux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir(s.staticDir))))
+	}
 
-	s.logger.Info("CBS server starting", "addr", s.addr)
-	return s.wt.ListenAndServe()
+	httpSrv := &http.Server{Addr: s.httpAddr, Handler: httpMux}
+	go func() {
+		s.logger.Info("HTTP page server starting", "addr", "http://localhost"+s.httpAddr)
+		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			s.logger.Error("HTTP server error", "error", err)
+		}
+	}()
+
+	s.logger.Info("Bytewire server starting", "wtAddr", s.addr, "httpAddr", s.httpAddr)
+	<-ctx.Done()
+	s.logger.Info("shutting down...")
+
+	httpSrv.Close()
+	return s.Shutdown()
 }
 
 // handleConnection manages a single WebTransport session.
@@ -117,16 +218,29 @@ func (s *Server) handleConnection(ctx context.Context, wtSession *webtransport.S
 	}()
 }
 
-// handleStream reads binary messages from a client stream.
-func (s *Server) handleStream(sess *Session, stream webtransport.Stream) {
+// handleStream reads length-prefixed binary frames from a client stream.
+// Each frame is [4B length][payload]. Multiple frames may arrive on the same stream.
+func (s *Server) handleStream(sess *Session, stream *webtransport.Stream) {
 	defer stream.Close()
-	buf := make([]byte, 4096)
+	lenBuf := make([]byte, 4)
 	for {
-		n, err := stream.Read(buf)
-		if err != nil {
+		// Read 4-byte length prefix
+		if _, err := io.ReadFull(stream, lenBuf); err != nil {
 			return
 		}
-		if err := sess.HandleIntent(buf[:n]); err != nil {
+		frameLen := int(binary.BigEndian.Uint32(lenBuf))
+		if frameLen <= 0 || frameLen > 65536 {
+			return
+		}
+
+		// Read exact frame body
+		frame := make([]byte, 4+frameLen)
+		copy(frame, lenBuf)
+		if _, err := io.ReadFull(stream, frame[4:]); err != nil {
+			return
+		}
+
+		if err := sess.HandleIntent(frame); err != nil {
 			s.logger.Error("intent error", "error", err, "sessionID", sess.ID)
 		}
 	}
@@ -162,16 +276,37 @@ func (w *wtWriter) Close() error {
 	return nil
 }
 
-// shellHTML is the minimal HTML page served to bootstrap the WASM client.
-const shellHTML = `<!DOCTYPE html>
+// buildShellHTML returns the HTML page that bootstraps the WASM client.
+// It injects the cert hash and CSS so the WASM binary is portable.
+func buildShellHTML(certHashJS, css, wtAddr string) string {
+	return fmt.Sprintf(`<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CBS App</title>
+  <title>Bytewire App</title>
+  <style>
+button{cursor:pointer;user-select:none;-webkit-user-select:none;border:none;outline:none}
+button:active{opacity:0.8;transform:scale(0.97)}
+%s</style>
 </head>
 <body>
-  <div id="cbs-root"></div>
-  <script src="/cbs.js"></script>
+  <div id="bw-root"></div>
+  <script>
+    window.__bw_config = {
+      url: "https://localhost%s/bw",
+      certHash: new Uint8Array(%s)
+    };
+  </script>
+  <script src="/static/wasm_exec.js"></script>
+  <script>
+    const go = new Go();
+    WebAssembly.instantiateStreaming(fetch("/static/bytewire.wasm"), go.importObject)
+      .then(result => go.run(result.instance))
+      .catch(err => {
+        document.getElementById("bw-root").textContent = "WASM load failed: " + err.message;
+      });
+  </script>
 </body>
-</html>`
+</html>`, css, wtAddr, certHashJS)
+}

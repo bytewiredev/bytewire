@@ -1,4 +1,4 @@
-// Package engine provides the CBS server runtime: WebTransport listener,
+// Package engine provides the Bytewire server runtime: WebTransport listener,
 // per-user session goroutines, and binary stream multiplexing.
 package engine
 
@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/cbsframework/cbs/pkg/dom"
-	"github.com/cbsframework/cbs/pkg/protocol"
+	"github.com/bytewiredev/bytewire/pkg/dom"
+	"github.com/bytewiredev/bytewire/pkg/protocol"
 )
 
 // SessionID uniquely identifies a connected user session.
@@ -28,6 +28,10 @@ type Session struct {
 	root   *dom.Node
 	writer Writer
 	logger *slog.Logger
+
+	currentPath string
+	navHandler  func(path string)
+	routeParams map[string]string
 }
 
 // Writer abstracts the binary transport. The engine writes opcode frames here.
@@ -72,18 +76,26 @@ func (s *Session) Mount(comp Component) error {
 	return s.writer.WriteMessage(buf.Bytes())
 }
 
-// HandleIntent processes a client event (click, input, etc.) by dispatching
-// to the appropriate node handler, then diffing and sending any resulting updates.
+// HandleIntent processes a client message (intent or navigation) by dispatching
+// to the appropriate handler, then flushing any resulting DOM updates.
 func (s *Session) HandleIntent(data []byte) error {
-	msg, _, err := protocol.Decode(data)
+	msg, _, err := protocol.DecodeFrame(data)
 	if err != nil {
 		return err
 	}
 
-	if msg.Op != protocol.OpClientIntent {
+	switch msg.Op {
+	case protocol.OpClientIntent:
+		return s.handleClientIntent(msg)
+	case protocol.OpClientNav:
+		return s.handleClientNav(msg.Text)
+	default:
 		return nil
 	}
+}
 
+// handleClientIntent dispatches a user interaction event to the target node's handler.
+func (s *Session) handleClientIntent(msg protocol.Message) error {
 	s.mu.Lock()
 	node := findNode(s.root, dom.NodeID(msg.NodeID))
 	s.mu.Unlock()
@@ -98,12 +110,22 @@ func (s *Session) HandleIntent(data []byte) error {
 		return nil
 	}
 
-	// Snapshot old tree for diffing
-	// For now, we rely on signal observers to mutate the tree in-place
-	// and then re-emit changed nodes.
 	handler(msg.Payload)
 
-	return nil
+	return s.flushDirtyNodes()
+}
+
+// handleClientNav processes a client-side navigation event.
+func (s *Session) handleClientNav(path string) error {
+	if s.navHandler == nil {
+		s.logger.Warn("nav event but no handler registered", "path", path)
+		return nil
+	}
+
+	s.currentPath = path
+	s.navHandler(path)
+
+	return s.flushDirtyNodes()
 }
 
 // Close terminates the session.
@@ -117,12 +139,45 @@ func (s *Session) Context() context.Context {
 	return s.ctx
 }
 
+// CurrentPath returns the session's current navigation path.
+func (s *Session) CurrentPath() string {
+	return s.currentPath
+}
+
+// SetCurrentPath sets the session's current navigation path.
+func (s *Session) SetCurrentPath(path string) {
+	s.currentPath = path
+}
+
+// SetNavHandler registers a callback invoked on client navigation events.
+func (s *Session) SetNavHandler(fn func(path string)) {
+	s.navHandler = fn
+}
+
+// SetRouteParams stores the current route's extracted parameters.
+func (s *Session) SetRouteParams(params map[string]string) {
+	s.routeParams = params
+}
+
+// RouteParam returns a named route parameter value.
+func (s *Session) RouteParam(key string) string {
+	if s.routeParams == nil {
+		return ""
+	}
+	return s.routeParams[key]
+}
+
 // emitFullTree serializes the entire DOM tree as InsertNode + UpdateText opcodes.
 func emitFullTree(buf *protocol.Buffer, n *dom.Node) {
 	if n == nil {
 		return
 	}
 	if n.Type == dom.TextNode {
+		parentID := uint32(0)
+		if n.Parent != nil {
+			parentID = uint32(n.Parent.ID)
+		}
+		buf.EncodeInsertNode(uint32(n.ID), parentID, 0, "#text", nil)
 		buf.EncodeUpdateText(uint32(n.ID), n.Text)
 		return
 	}
@@ -131,10 +186,74 @@ func emitFullTree(buf *protocol.Buffer, n *dom.Node) {
 	if n.Parent != nil {
 		parentID = uint32(n.Parent.ID)
 	}
-	buf.EncodeInsertNode(parentID, 0, n.Tag, n.Attrs)
+	buf.EncodeInsertNode(uint32(n.ID), parentID, 0, n.Tag, n.Attrs)
 
 	for _, child := range n.Children {
 		emitFullTree(buf, child)
+	}
+}
+
+// flushDirtyNodes walks the tree, drains PendingOps (structural changes),
+// emits OpUpdateText for dirty text, and emits OpSetAttr/OpSetStyle for
+// dirty attributes and styles.
+func (s *Session) flushDirtyNodes() error {
+	s.mu.Lock()
+	var dirty []*dom.Node
+	collectDirty(s.root, &dirty)
+	s.mu.Unlock()
+
+	if len(dirty) == 0 {
+		return nil
+	}
+
+	buf := protocol.AcquireBuffer()
+	defer buf.Release()
+
+	for _, n := range dirty {
+		// 1. Drain structural PendingOps first (insert/remove)
+		for _, op := range n.PendingOps {
+			op(buf)
+		}
+		n.PendingOps = n.PendingOps[:0]
+
+		// 2. Emit text updates
+		if n.DirtyText {
+			buf.EncodeUpdateText(uint32(n.ID), n.Text)
+			n.DirtyText = false
+		}
+
+		// 3. Emit attribute updates
+		for key, val := range n.DirtyAttrs {
+			if val == "" {
+				buf.EncodeRemoveAttr(uint32(n.ID), key)
+			} else {
+				buf.EncodeSetAttr(uint32(n.ID), key, val)
+			}
+		}
+		clear(n.DirtyAttrs)
+
+		// 4. Emit style updates
+		for prop, val := range n.DirtyStyles {
+			buf.EncodeSetStyle(uint32(n.ID), prop, val)
+		}
+		clear(n.DirtyStyles)
+
+		n.Dirty = false
+	}
+
+	return s.writer.WriteMessage(buf.Bytes())
+}
+
+// collectDirty gathers all nodes with Dirty=true.
+func collectDirty(n *dom.Node, out *[]*dom.Node) {
+	if n == nil {
+		return
+	}
+	if n.Dirty {
+		*out = append(*out, n)
+	}
+	for _, child := range n.Children {
+		collectDirty(child, out)
 	}
 }
 

@@ -1,6 +1,10 @@
 package dom
 
-import "sync/atomic"
+import (
+	"sync/atomic"
+
+	"github.com/bytewiredev/bytewire/pkg/protocol"
+)
 
 // NodeID uniquely identifies a DOM node within a session.
 type NodeID uint32
@@ -32,6 +36,17 @@ type Node struct {
 
 	// Event handlers keyed by event type byte (EventClick, etc.)
 	Handlers map[byte]func([]byte)
+
+	// Dirty is set to true by signal observers when the node's text changes.
+	Dirty bool
+	// SignalBound is true if this node was created via TextF and is bound to a signal.
+	SignalBound bool
+
+	// Reactive change tracking (populated by signal observers, drained by flush).
+	PendingOps  []func(buf *protocol.Buffer) // structural insert/remove ops
+	DirtyAttrs  map[string]string            // attr key -> new value ("" = remove)
+	DirtyStyles map[string]string            // CSS prop -> new value
+	DirtyText   bool                         // true if Text changed via signal
 }
 
 // newElement creates an element node with the given tag.
@@ -60,4 +75,32 @@ func (n *Node) AppendChild(child *Node) *Node {
 	child.Parent = n
 	n.Children = append(n.Children, child)
 	return n
+}
+
+// RemoveChild removes a child node from this node's children.
+func (n *Node) RemoveChild(child *Node) {
+	for i, c := range n.Children {
+		if c == child {
+			n.Children = append(n.Children[:i], n.Children[i+1:]...)
+			child.Parent = nil
+			return
+		}
+	}
+}
+
+// InsertChildBefore inserts child before the given sibling.
+// If sibling is nil, appends at the end.
+func (n *Node) InsertChildBefore(child, sibling *Node) {
+	child.Parent = n
+	if sibling == nil {
+		n.Children = append(n.Children, child)
+		return
+	}
+	for i, c := range n.Children {
+		if c == sibling {
+			n.Children = append(n.Children[:i], append([]*Node{child}, n.Children[i:]...)...)
+			return
+		}
+	}
+	n.Children = append(n.Children, child)
 }

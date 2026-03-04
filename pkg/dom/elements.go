@@ -1,6 +1,6 @@
 package dom
 
-import "github.com/cbsframework/cbs/pkg/protocol"
+import "github.com/bytewiredev/bytewire/pkg/protocol"
 
 // Option configures a Node during creation.
 type Option func(*Node)
@@ -111,10 +111,61 @@ func Text(content string) *Node {
 // the node is automatically updated via binary delta.
 func TextF[T comparable](s *Signal[T], format func(T) string) *Node {
 	n := newText(format(s.Get()))
+	n.SignalBound = true
 	s.Observe(func(v T) {
 		n.Text = format(v)
+		n.Dirty = true
+		n.DirtyText = true
 	})
 	return n
+}
+
+// AttrF binds an attribute to a signal. When the signal changes, the format
+// function produces the new attribute value. Returning "" removes the attribute.
+func AttrF[T comparable](s *Signal[T], key string, format func(T) string) Option {
+	return func(n *Node) {
+		n.Attrs[key] = format(s.Get())
+		s.Observe(func(v T) {
+			val := format(v)
+			n.Attrs[key] = val
+			if n.DirtyAttrs == nil {
+				n.DirtyAttrs = make(map[string]string)
+			}
+			n.DirtyAttrs[key] = val
+			n.Dirty = true
+		})
+	}
+}
+
+// ClassF binds the "class" attribute to a signal.
+func ClassF[T comparable](s *Signal[T], format func(T) string) Option {
+	return AttrF(s, "class", format)
+}
+
+// StyleF binds an inline CSS property to a signal.
+func StyleF[T comparable](s *Signal[T], property string, format func(T) string) Option {
+	return func(n *Node) {
+		n.Styles[property] = format(s.Get())
+		s.Observe(func(v T) {
+			val := format(v)
+			n.Styles[property] = val
+			if n.DirtyStyles == nil {
+				n.DirtyStyles = make(map[string]string)
+			}
+			n.DirtyStyles[property] = val
+			n.Dirty = true
+		})
+	}
+}
+
+// Link sets href and data-bw-link attributes on an <a> element for SPA navigation.
+// The WASM client intercepts clicks on elements with data-bw-link to prevent
+// full page loads and instead sends OpClientNav to the server.
+func Link(href string) Option {
+	return func(n *Node) {
+		n.Attrs["href"] = href
+		n.Attrs["data-bw-link"] = ""
+	}
 }
 
 // El creates a custom element with any tag name.

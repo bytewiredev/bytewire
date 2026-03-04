@@ -28,5 +28,5 @@ Thumbs.db
 # Go
 vendor/
 
-# CBS
+# Bytewire
 memory.db

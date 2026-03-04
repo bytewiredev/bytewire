@@ -69,10 +69,10 @@ var cssRules = map[Class]string{
 }
 
 // Generate produces a minimal CSS stylesheet containing only the classes used.
-// This is CBS's dead-code eliminating CSS compiler.
+// This is Bytewire's dead-code eliminating CSS compiler.
 func Generate(used []Class) string {
 	var sb strings.Builder
-	sb.WriteString("/* CBS Generated Stylesheet - Zero Dead Code */\n")
+	sb.WriteString("/* Bytewire Generated Stylesheet - Zero Dead Code */\n")
 
 	for _, cls := range used {
 		if rule, ok := cssRules[cls]; ok {
