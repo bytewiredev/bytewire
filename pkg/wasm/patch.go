@@ -286,12 +286,34 @@ func applyFrame(data []byte) {
 	case 0x00: // OpHello
 		handleHello(data)
 
+	case 0x0C: // OpAuthChallenge
+		CompletePasskey(data)
+
+	case 0x0D: // OpAuthResult
+		handleAuthResult(data)
+
 	default:
 		fmt.Printf("bytewire: unknown opcode 0x%02x\n", op)
 	}
 
 	// Update DevTools node count after any mutation
 	updateDevToolsNodeCount()
+}
+
+func handleAuthResult(data []byte) {
+	if len(data) < 2 {
+		return
+	}
+	success := data[1] == 1
+	token := ""
+	if len(data) > 2 {
+		token = string(data[2:])
+	}
+	if success {
+		fmt.Printf("bytewire: authenticated (token=%s)\n", token)
+	} else {
+		fmt.Println("bytewire: authentication failed")
+	}
 }
 
 func findNull(data []byte) int {

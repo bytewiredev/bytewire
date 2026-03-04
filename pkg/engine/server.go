@@ -306,6 +306,7 @@ func (s *Server) handleConnection(ctx context.Context, wtSession *webtransport.S
 
 	w := &wtWriter{session: wtSession}
 	sess := NewSession(ctx, w, s.logger, s.newLimiter(), s.metrics, s.plugins)
+	sess.credStore = s.credStore
 
 	s.mu.Lock()
 	s.sessions[sess.ID] = sess
@@ -452,6 +453,7 @@ func (s *Server) handleWebSocket(conn *websocket.Conn) {
 
 	w := &wsWriter{conn: conn}
 	sess := NewSession(context.Background(), w, s.logger, s.newLimiter(), s.metrics, s.plugins)
+	sess.credStore = s.credStore
 
 	s.mu.Lock()
 	s.sessions[sess.ID] = sess

@@ -30,6 +30,15 @@ type Message struct {
 	Offset    uint32   // OpReplaceText
 	Length    uint32   // OpReplaceText
 	Children  []Message // OpBatch
+
+	RPID              string // OpAuthChallenge
+	Challenge         []byte // OpAuthChallenge
+	Success           bool   // OpAuthResult
+	Token             string // OpAuthResult
+	CredentialID      []byte // OpClientAuth
+	AuthenticatorData []byte // OpClientAuth
+	ClientDataJSON    []byte // OpClientAuth
+	Signature         []byte // OpClientAuth
 }
 
 // Decode reads a single Bytewire message from raw bytes and returns
@@ -226,6 +235,74 @@ func Decode(data []byte) (Message, int, error) {
 		msg.Major = data[1]
 		msg.Minor = data[2]
 		return msg, 3, nil
+
+	case OpAuthChallenge:
+		if len(data) < 2 {
+			return msg, 0, ErrShortRead
+		}
+		rpIDLen := int(data[1])
+		if len(data) < 2+rpIDLen+32 {
+			return msg, 0, ErrShortRead
+		}
+		msg.RPID = string(data[2 : 2+rpIDLen])
+		msg.Challenge = data[2+rpIDLen : 2+rpIDLen+32]
+		return msg, 2 + rpIDLen + 32, nil
+
+	case OpAuthResult:
+		if len(data) < 2 {
+			return msg, 0, ErrShortRead
+		}
+		msg.Success = data[1] == 1
+		msg.Token = string(data[2:])
+		return msg, len(data), nil
+
+	case OpClientAuth:
+		pos = 1
+		// credentialID
+		if pos+2 > len(data) {
+			return msg, 0, ErrShortRead
+		}
+		credIDLen := int(binary.BigEndian.Uint16(data[pos : pos+2]))
+		pos += 2
+		if pos+credIDLen > len(data) {
+			return msg, 0, ErrShortRead
+		}
+		msg.CredentialID = data[pos : pos+credIDLen]
+		pos += credIDLen
+		// authenticatorData
+		if pos+2 > len(data) {
+			return msg, 0, ErrShortRead
+		}
+		authDataLen := int(binary.BigEndian.Uint16(data[pos : pos+2]))
+		pos += 2
+		if pos+authDataLen > len(data) {
+			return msg, 0, ErrShortRead
+		}
+		msg.AuthenticatorData = data[pos : pos+authDataLen]
+		pos += authDataLen
+		// clientDataJSON
+		if pos+2 > len(data) {
+			return msg, 0, ErrShortRead
+		}
+		cdjLen := int(binary.BigEndian.Uint16(data[pos : pos+2]))
+		pos += 2
+		if pos+cdjLen > len(data) {
+			return msg, 0, ErrShortRead
+		}
+		msg.ClientDataJSON = data[pos : pos+cdjLen]
+		pos += cdjLen
+		// signature
+		if pos+2 > len(data) {
+			return msg, 0, ErrShortRead
+		}
+		sigLen := int(binary.BigEndian.Uint16(data[pos : pos+2]))
+		pos += 2
+		if pos+sigLen > len(data) {
+			return msg, 0, ErrShortRead
+		}
+		msg.Signature = data[pos : pos+sigLen]
+		pos += sigLen
+		return msg, pos, nil
 
 	default:
 		return msg, 0, fmt.Errorf("%w: 0x%02x", ErrUnknownOp, msg.Op)
