@@ -15,6 +15,12 @@ func nextSignalID() SignalID {
 	return SignalID(signalCounter.Add(1))
 }
 
+// Observable is the read/subscribe interface shared by Signal and ListSignal.
+type Observable[T any] interface {
+	Get() T
+	Observe(fn func(T)) func()
+}
+
 // Signal is a reactive state container. When its value changes,
 // any bound DOM nodes are automatically flagged for binary delta emission.
 type Signal[T comparable] struct {
@@ -118,7 +124,7 @@ func (s *Signal[T]) Observe(fn func(T)) func() {
 }
 
 // Computed creates a derived signal that recomputes when the source changes.
-func Computed[T comparable, U comparable](source *Signal[T], derive func(T) U) *Signal[U] {
+func Computed[T any, U comparable](source Observable[T], derive func(T) U) *Signal[U] {
 	computed := NewSignal(derive(source.Get()))
 	source.Observe(func(v T) {
 		computed.Set(derive(v))

@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/bytewiredev/bytewire/pkg/devcert"
+	"github.com/bytewiredev/bytewire/pkg/dom"
 	"github.com/bytewiredev/bytewire/pkg/metrics"
 	"github.com/bytewiredev/bytewire/pkg/plugin"
 	"github.com/bytewiredev/bytewire/pkg/protocol"
@@ -59,6 +60,9 @@ type Server struct {
 
 	// WebAuthn credential store for passkey authentication.
 	credStore CredentialStore
+
+	// SSR enables server-side rendering of the initial HTML.
+	ssrEnabled bool
 }
 
 // ServerOption configures the Server.
@@ -126,6 +130,19 @@ func WithPlugins(r *plugin.Registry) ServerOption {
 func WithCredentialStore(cs CredentialStore) ServerOption {
 	return func(s *Server) { s.credStore = cs }
 }
+
+// WithSSR enables server-side rendering. Each HTTP request mounts the
+// component tree and renders it to HTML before sending the page shell.
+func WithSSR() ServerOption {
+	return func(s *Server) { s.ssrEnabled = true }
+}
+
+// noopWriter is a Writer that discards all messages. Used for SSR sessions
+// where no real transport connection exists.
+type noopWriter struct{}
+
+func (noopWriter) WriteMessage([]byte) error { return nil }
+func (noopWriter) Close() error              { return nil }
 
 // WithMetrics attaches a metrics registry to the server. The default Bytewire
 // metrics are registered automatically and the /metrics HTTP endpoint is served
@@ -249,12 +266,23 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}()
 
 	// Build and serve HTML shell on plain HTTP.
-	shell := buildShellHTML(certHashJS, s.css, s.addr)
 	httpMux := http.NewServeMux()
-	httpMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, shell)
-	})
+	if s.ssrEnabled {
+		httpMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			sess := NewSession(r.Context(), noopWriter{}, s.logger, nil, nil, s.plugins)
+			sess.SetCurrentPath(r.URL.Path)
+			root := s.component(sess)
+			html := dom.RenderHTML(root)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			fmt.Fprint(w, buildShellHTML(certHashJS, s.css, s.addr, html))
+		})
+	} else {
+		shell := buildShellHTML(certHashJS, s.css, s.addr, "")
+		httpMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			fmt.Fprint(w, shell)
+		})
+	}
 	if s.staticDir != "" {
 		httpMux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir(s.staticDir))))
 	}
@@ -560,7 +588,7 @@ func (w *wsWriter) Close() error {
 
 // buildShellHTML returns the HTML page that bootstraps the WASM client.
 // It injects the cert hash and CSS so the WASM binary is portable.
-func buildShellHTML(certHashJS, css, wtAddr string) string {
+func buildShellHTML(certHashJS, css, wtAddr, innerHTML string) string {
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html>
 <head>
@@ -573,7 +601,7 @@ button:active{opacity:0.8;transform:scale(0.97)}
 %s</style>
 </head>
 <body>
-  <div id="bw-root"></div>
+  <div id="bw-root">%s</div>
   <script>
     window.__bw_config = {
       url: "https://localhost%s/bw",
@@ -591,5 +619,5 @@ button:active{opacity:0.8;transform:scale(0.97)}
       });
   </script>
 </body>
-</html>`, css, wtAddr, certHashJS)
+</html>`, css, innerHTML, wtAddr, certHashJS)
 }

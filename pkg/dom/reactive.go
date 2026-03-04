@@ -6,7 +6,7 @@ import "github.com/bytewiredev/bytewire/pkg/protocol"
 // The returned container node is a stable anchor in the DOM.
 // When the condition flips, the old subtree is removed and the new one inserted.
 // The els parameter is optional — pass nil to render nothing when the condition is false.
-func If[T comparable](s *Signal[T], cond func(T) bool, then func() *Node, els func() *Node) *Node {
+func If[T any](s Observable[T], cond func(T) bool, then func() *Node, els func() *Node) *Node {
 	container := newElement("div")
 	active := cond(s.Get())
 	var current *Node

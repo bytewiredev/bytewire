@@ -102,6 +102,28 @@ func TestIfNilElse(t *testing.T) {
 	}
 }
 
+func TestIfWithListSignal(t *testing.T) {
+	ls := NewListSignal([]string{})
+	container := If(ls, func(items []string) bool { return len(items) == 0 },
+		func() *Node { return Text("empty") },
+		func() *Node { return Text("has items") },
+	)
+
+	if len(container.Children) != 1 || container.Children[0].Text != "empty" {
+		t.Fatal("expected 'empty' branch initially")
+	}
+
+	ls.Append("x")
+	if len(container.Children) != 1 || container.Children[0].Text != "has items" {
+		t.Fatal("expected 'has items' branch after append")
+	}
+
+	ls.Set([]string{})
+	if len(container.Children) != 1 || container.Children[0].Text != "empty" {
+		t.Fatal("expected 'empty' branch after clearing")
+	}
+}
+
 func TestForAppendItem(t *testing.T) {
 	s := NewListSignal([]string{"a"})
 	container := For(s, func(item string) string { return item },
