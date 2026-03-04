@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"strconv"
+	"sync/atomic"
 	"syscall/js"
 )
 
@@ -104,6 +105,7 @@ func connect() bool {
 	}
 
 	root.Set("textContent", "")
+	atomic.StoreInt32(&IsOnline, 1)
 
 	// Read incoming messages and apply DOM patches.
 	conn.onMessage(func(data []byte) {
@@ -112,6 +114,7 @@ func connect() bool {
 
 	// Reconnect on close.
 	conn.onClose(func() {
+		atomic.StoreInt32(&IsOnline, 0)
 		fmt.Println("bytewire: connection lost, starting reconnect")
 		reconnect()
 	})
@@ -176,6 +179,7 @@ func reconnect() {
 	clearNodeRegistry()
 	root.Set("textContent", "")
 	showOverlay("Reconnecting…")
+	loadPersistedQueue()
 
 	delay := 1000
 	maxDelay := 10000
@@ -211,6 +215,8 @@ func reconnect() {
 		conn = newConn
 		fmt.Println("bytewire: reconnected")
 		hideOverlay()
+		drainOfflineQueue()
+		clearPersistedQueue()
 
 		conn.onMessage(func(data []byte) {
 			applyOpcodes(data)
@@ -282,9 +288,14 @@ func sendIntent(nodeID uint32, eventType byte, payload []byte) {
 	frame[9] = eventType
 	copy(frame[10:], payload)
 
+	if atomic.LoadInt32(&IsOnline) != 1 {
+		GlobalQueue.Enqueue(frame)
+		persistQueue()
+		return
+	}
+
 	uint8Array := js.Global().Get("Uint8Array").New(len(frame))
 	js.CopyBytesToJS(uint8Array, frame)
-
 	conn.send(uint8Array)
 }
 
@@ -296,9 +307,14 @@ func sendClientNav(path string) {
 	frame[4] = 0x11 // OpClientNav
 	copy(frame[5:], path)
 
+	if atomic.LoadInt32(&IsOnline) != 1 {
+		GlobalQueue.Enqueue(frame)
+		persistQueue()
+		return
+	}
+
 	uint8Array := js.Global().Get("Uint8Array").New(len(frame))
 	js.CopyBytesToJS(uint8Array, frame)
-
 	conn.send(uint8Array)
 }
 

@@ -52,3 +52,10 @@ func (q *OfflineQueue) Len() int {
 	defer q.mu.Unlock()
 	return len(q.queue)
 }
+
+// GlobalQueue is the package-level offline queue used by the WASM client.
+var GlobalQueue = NewOfflineQueue(256)
+
+// IsOnline tracks whether the client has an active connection.
+// Use sync/atomic for goroutine safety.
+var IsOnline int32
