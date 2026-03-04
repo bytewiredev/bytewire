@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/cbsframework/cbs/pkg/devcert"
+	"github.com/bytewiredev/bytewire/pkg/devcert"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/webtransport-go"
 )

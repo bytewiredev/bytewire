@@ -1,6 +1,6 @@
 package dom
 
-import "github.com/cbsframework/cbs/pkg/protocol"
+import "github.com/bytewiredev/bytewire/pkg/protocol"
 
 // Diff compares an old and new node tree and emits binary opcodes
 // representing the minimal set of DOM mutations needed.

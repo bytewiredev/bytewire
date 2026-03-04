@@ -5,9 +5,9 @@ package router
 import (
 	"strings"
 
-	"github.com/cbsframework/cbs/pkg/dom"
-	"github.com/cbsframework/cbs/pkg/engine"
-	"github.com/cbsframework/cbs/pkg/protocol"
+	"github.com/bytewiredev/bytewire/pkg/dom"
+	"github.com/bytewiredev/bytewire/pkg/engine"
+	"github.com/bytewiredev/bytewire/pkg/protocol"
 )
 
 // Route maps a URL pattern to a component.

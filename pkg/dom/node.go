@@ -3,7 +3,7 @@ package dom
 import (
 	"sync/atomic"
 
-	"github.com/cbsframework/cbs/pkg/protocol"
+	"github.com/bytewiredev/bytewire/pkg/protocol"
 )
 
 // NodeID uniquely identifies a DOM node within a session.

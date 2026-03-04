@@ -10,10 +10,10 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/cbsframework/cbs/pkg/dom"
-	"github.com/cbsframework/cbs/pkg/engine"
-	"github.com/cbsframework/cbs/pkg/protocol"
-	"github.com/cbsframework/cbs/pkg/style"
+	"github.com/bytewiredev/bytewire/pkg/dom"
+	"github.com/bytewiredev/bytewire/pkg/engine"
+	"github.com/bytewiredev/bytewire/pkg/protocol"
+	"github.com/bytewiredev/bytewire/pkg/style"
 )
 
 func counterApp(s *engine.Session) *dom.Node {

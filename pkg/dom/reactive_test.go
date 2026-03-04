@@ -3,7 +3,7 @@ package dom
 import (
 	"testing"
 
-	"github.com/cbsframework/cbs/pkg/protocol"
+	"github.com/bytewiredev/bytewire/pkg/protocol"
 )
 
 func TestListSignalSetAndGet(t *testing.T) {

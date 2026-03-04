@@ -3,7 +3,7 @@
 ## Product Requirements Document
 
 **Version:** 0.1.0
-**Module:** `github.com/cbsframework/cbs`
+**Module:** `github.com/bytewiredev/bytewire`
 **Go:** 1.24+
 **Status:** Alpha
 **Last Updated:** 2026-03-04
@@ -1343,7 +1343,7 @@ Connection drops
 
 ## 12. Developer API Reference
 
-### Package `protocol` — `github.com/cbsframework/cbs/pkg/protocol`
+### Package `protocol` — `github.com/bytewiredev/bytewire/pkg/protocol`
 
 Binary instruction set encoder, decoder, and opcode constants.
 
@@ -1427,7 +1427,7 @@ func Decode(data []byte) (Message, int, error)
 
 ---
 
-### Package `dom` — `github.com/cbsframework/cbs/pkg/dom`
+### Package `dom` — `github.com/bytewiredev/bytewire/pkg/dom`
 
 Virtual DOM tree, reactive signals, element builders, and tree diffing.
 
@@ -1530,7 +1530,7 @@ func Diff(buf *protocol.Buffer, old, next *Node)
 
 ---
 
-### Package `engine` — `github.com/cbsframework/cbs/pkg/engine`
+### Package `engine` — `github.com/bytewiredev/bytewire/pkg/engine`
 
 WebTransport server, session management, and binary stream multiplexing.
 
@@ -1581,7 +1581,7 @@ func (b *Broadcast) Unsubscribe(topic string, ch chan []byte)
 
 ---
 
-### Package `style` — `github.com/cbsframework/cbs/pkg/style`
+### Package `style` — `github.com/bytewiredev/bytewire/pkg/style`
 
 Type-safe CSS utility classes and dead-code eliminating CSS generator.
 
@@ -1597,7 +1597,7 @@ func GenerateAll() string
 
 ---
 
-### Package `wasm` — `github.com/cbsframework/cbs/pkg/wasm`
+### Package `wasm` — `github.com/bytewiredev/bytewire/pkg/wasm`
 
 Browser WASM client runtime (build constraint: `js && wasm`).
 
@@ -1778,4 +1778,4 @@ For a local development setup (RTT ≈ 0): **sub-frame latency** (~16ms total).
 
 ---
 
-*CBS is open source software. Module: `github.com/cbsframework/cbs`*
+*CBS is open source software. Module: `github.com/bytewiredev/bytewire`*

@@ -1,6 +1,6 @@
 package dom
 
-import "github.com/cbsframework/cbs/pkg/protocol"
+import "github.com/bytewiredev/bytewire/pkg/protocol"
 
 // Option configures a Node during creation.
 type Option func(*Node)

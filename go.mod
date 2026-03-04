@@ -1,4 +1,4 @@
-module github.com/cbsframework/cbs
+module github.com/bytewiredev/bytewire
 
 go 1.24
 

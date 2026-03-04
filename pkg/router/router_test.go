@@ -3,8 +3,8 @@ package router
 import (
 	"testing"
 
-	"github.com/cbsframework/cbs/pkg/dom"
-	"github.com/cbsframework/cbs/pkg/engine"
+	"github.com/bytewiredev/bytewire/pkg/dom"
+	"github.com/bytewiredev/bytewire/pkg/engine"
 )
 
 func dummyComp(text string) engine.Component {

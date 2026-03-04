@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/cbsframework/cbs/pkg/dom"
-	"github.com/cbsframework/cbs/pkg/protocol"
+	"github.com/bytewiredev/bytewire/pkg/dom"
+	"github.com/bytewiredev/bytewire/pkg/protocol"
 )
 
 // SessionID uniquely identifies a connected user session.

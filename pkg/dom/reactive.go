@@ -1,6 +1,6 @@
 package dom
 
-import "github.com/cbsframework/cbs/pkg/protocol"
+import "github.com/bytewiredev/bytewire/pkg/protocol"
 
 // If conditionally renders one of two subtrees based on a signal's value.
 // The returned container node is a stable anchor in the DOM.
