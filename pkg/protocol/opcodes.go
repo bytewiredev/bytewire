@@ -42,6 +42,14 @@ const (
 	// OpBatch wraps multiple opcodes into a single atomic frame.
 	// Format: [0x09][4B count][...nested opcodes]
 	OpBatch byte = 0x09
+
+	// OpError sends a server error message to the client for display.
+	// Format: [0x0A][2B message length][UTF-8 message bytes]
+	OpError byte = 0x0A
+
+	// OpDevToolsState sends a JSON state snapshot to the client for DevTools inspection.
+	// Format: [0x0B][4B JSON length][JSON bytes]
+	OpDevToolsState byte = 0x0B
 )
 
 // Client -> Server opcodes (0x10 - 0x1F)

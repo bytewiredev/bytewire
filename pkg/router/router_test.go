@@ -134,3 +134,67 @@ func TestRouterMatchNotFoundNil(t *testing.T) {
 		t.Fatal("expected nil when no notFound set")
 	}
 }
+
+func TestSplitQueryNoQuery(t *testing.T) {
+	path, query := splitQuery("/about")
+	if path != "/about" {
+		t.Fatalf("expected /about, got %q", path)
+	}
+	if query != nil {
+		t.Fatalf("expected nil query, got %v", query)
+	}
+}
+
+func TestSplitQuerySingle(t *testing.T) {
+	path, query := splitQuery("/search?q=hello")
+	if path != "/search" {
+		t.Fatalf("expected /search, got %q", path)
+	}
+	if query["q"] != "hello" {
+		t.Fatalf("expected q=hello, got %q", query["q"])
+	}
+}
+
+func TestSplitQueryMultiple(t *testing.T) {
+	path, query := splitQuery("/search?q=hello&page=2&sort=asc")
+	if path != "/search" {
+		t.Fatalf("expected /search, got %q", path)
+	}
+	if query["q"] != "hello" || query["page"] != "2" || query["sort"] != "asc" {
+		t.Fatalf("unexpected query: %v", query)
+	}
+}
+
+func TestSplitQueryEmpty(t *testing.T) {
+	path, query := splitQuery("/search?")
+	if path != "/search" {
+		t.Fatalf("expected /search, got %q", path)
+	}
+	if query != nil {
+		t.Fatalf("expected nil query for empty query string, got %v", query)
+	}
+}
+
+func TestSplitQueryKeyOnly(t *testing.T) {
+	path, query := splitQuery("/page?debug")
+	if path != "/page" {
+		t.Fatalf("expected /page, got %q", path)
+	}
+	if query["debug"] != "" {
+		t.Fatalf("expected debug='', got %q", query["debug"])
+	}
+	if _, ok := query["debug"]; !ok {
+		t.Fatal("expected debug key to exist")
+	}
+}
+
+func TestRouterMatchWithQueryString(t *testing.T) {
+	r := New()
+	r.Handle("/search", dummyComp("search"))
+
+	// match should work on the path without query string
+	comp, _ := r.match("/search")
+	if comp == nil {
+		t.Fatal("expected match for /search")
+	}
+}
