@@ -1,8 +1,8 @@
 //go:build js && wasm
 
-// Package wasm is the Bytewire browser client. It connects WebTransport,
-// receives binary opcodes, patches the DOM, and delegates events —
-// all from Go via syscall/js. No external JavaScript required.
+// Package wasm is the Bytewire browser client. It connects via WebTransport
+// (or falls back to WebSocket), receives binary opcodes, patches the DOM,
+// and delegates events -- all from Go via syscall/js. No external JavaScript required.
 package wasm
 
 import (
@@ -17,9 +17,8 @@ var (
 	root     js.Value
 	nodes    map[uint32]js.Value
 
-	// intentWriter is the persistent WritableStreamDefaultWriter
-	// for sending client intents over a single bidi stream.
-	intentWriter js.Value
+	// conn is the active transport connection (WebTransport or WebSocket).
+	conn transport
 
 	// overlay is the reconnection status overlay element.
 	overlay js.Value
@@ -31,7 +30,7 @@ func init() {
 	overlay = js.Undefined()
 }
 
-// Start initializes the Bytewire WASM client: connects WebTransport,
+// Start initializes the Bytewire WASM client: connects to the server,
 // reads server patches, and sets up event delegation.
 func Start() {
 	root = document.Call("getElementById", "bw-root")
@@ -66,38 +65,69 @@ func Start() {
 	select {}
 }
 
-// connect establishes the WebTransport connection and starts reading streams.
+// connect establishes a transport connection and starts reading messages.
 // Returns true on success, false on fatal config errors.
 func connect() bool {
-	// Read config from window.__bw_config injected by the server.
 	config := js.Global().Get("__bw_config")
 	if config.IsUndefined() || config.IsNull() {
 		root.Set("textContent", "Error: __bw_config not set")
 		return false
 	}
 
-	wtURL := config.Get("url").String()
-	certHash := config.Get("certHash")
+	var err error
 
-	wt, err := dialWebTransport(wtURL, certHash)
-	if err != "" {
-		root.Set("textContent", "WebTransport failed: "+err)
-		fmt.Println("bytewire: WebTransport failed:", err)
-		return false
+	if detectTransport() {
+		wtURL := config.Get("url").String()
+		certHash := config.Get("certHash")
+		conn, err = newWebTransportConn(wtURL, certHash)
+		if err != nil {
+			fmt.Println("bytewire: WebTransport failed:", err)
+			// Fall through to WebSocket if available
+			conn, err = tryWebSocket(config)
+			if err != nil {
+				root.Set("textContent", "Connection failed: "+err.Error())
+				return false
+			}
+		} else {
+			fmt.Println("bytewire: WebTransport connected")
+		}
+	} else {
+		fmt.Println("bytewire: WebTransport not available, using WebSocket fallback")
+		conn, err = tryWebSocket(config)
+		if err != nil {
+			root.Set("textContent", "Connection failed: "+err.Error())
+			return false
+		}
 	}
 
-	fmt.Println("bytewire: WebTransport connected")
 	root.Set("textContent", "")
 
-	if !openIntentStream(wt) {
-		root.Set("textContent", "Error: could not open intent stream")
-		return false
-	}
+	// Read incoming messages and apply DOM patches.
+	conn.onMessage(func(data []byte) {
+		applyOpcodes(data)
+	})
 
-	// Start reading server patches; on disconnect, trigger reconnect.
-	go readIncomingStreamsWithReconnect(wt)
+	// Reconnect on close.
+	conn.onClose(func() {
+		fmt.Println("bytewire: connection lost, starting reconnect")
+		reconnect()
+	})
 
 	return true
+}
+
+// tryWebSocket attempts a WebSocket connection using the config's wsURL.
+func tryWebSocket(config js.Value) (*webSocketConn, error) {
+	wsURLVal := config.Get("wsURL")
+	if wsURLVal.IsUndefined() || wsURLVal.IsNull() {
+		return nil, fmt.Errorf("no WebSocket fallback URL configured")
+	}
+	wsConn, err := newWebSocketConn(wsURLVal.String())
+	if err != nil {
+		return nil, fmt.Errorf("WebSocket: %w", err)
+	}
+	fmt.Println("bytewire: WebSocket connected")
+	return wsConn, nil
 }
 
 // dialWebTransport creates a WebTransport connection and awaits ready.
@@ -138,97 +168,57 @@ func dialWebTransport(wtURL string, certHash js.Value) (js.Value, string) {
 	return wt, connectErr
 }
 
-// openIntentStream opens the persistent bidi stream for client intents.
-func openIntentStream(wt js.Value) bool {
-	openDone := make(chan struct{})
-	wt.Call("createBidirectionalStream").Call("then",
-		js.FuncOf(func(_ js.Value, args []js.Value) any {
-			stream := args[0]
-			writable := stream.Get("writable")
-			intentWriter = writable.Call("getWriter")
-			close(openDone)
-			return nil
-		}),
-	).Call("catch",
-		js.FuncOf(func(_ js.Value, args []js.Value) any {
-			fmt.Println("bytewire: failed to open intent stream", args[0].Call("toString").String())
-			close(openDone)
-			return nil
-		}),
-	)
-	<-openDone
-
-	return !intentWriter.IsUndefined() && !intentWriter.IsNull()
-}
-
-// readIncomingStreamsWithReconnect reads streams and triggers reconnection on disconnect.
-func readIncomingStreamsWithReconnect(wt js.Value) {
-	// Wait for the WebTransport session to close.
-	closed := make(chan struct{})
-	wt.Get("closed").Call("then",
-		js.FuncOf(func(_ js.Value, _ []js.Value) any {
-			close(closed)
-			return nil
-		}),
-	).Call("catch",
-		js.FuncOf(func(_ js.Value, _ []js.Value) any {
-			close(closed)
-			return nil
-		}),
-	)
-
-	// Read streams normally while connected.
-	go readIncomingStreams(wt)
-
-	<-closed
-	fmt.Println("bytewire: connection lost, starting reconnect")
-	reconnect()
-}
-
 // reconnect attempts to re-establish the connection with exponential backoff.
 func reconnect() {
-	// Clear stale DOM state — server will re-mount the full tree.
 	clearNodeRegistry()
 	root.Set("textContent", "")
 	showOverlay("Reconnecting…")
 
-	config := js.Global().Get("__bw_config")
-	wtURL := config.Get("url").String()
-	certHash := config.Get("certHash")
-
-	delay := 1000 // milliseconds
+	delay := 1000
 	maxDelay := 10000
 	maxTotalMs := 30000
 	elapsedMs := 0
 
+	config := js.Global().Get("__bw_config")
+
 	for elapsedMs < maxTotalMs {
-		// Sleep using a JS setTimeout-based channel.
 		sleep(delay)
 		elapsedMs += delay
 
 		fmt.Printf("bytewire: reconnect attempt (elapsed %ds)\n", elapsedMs/1000)
 
-		wt, err := dialWebTransport(wtURL, certHash)
-		if err != "" {
-			fmt.Println("bytewire: reconnect failed:", err)
-			delay = min(delay*2, maxDelay)
-			continue
+		var newConn transport
+		var err error
+
+		if detectTransport() {
+			wtURL := config.Get("url").String()
+			certHash := config.Get("certHash")
+			newConn, err = newWebTransportConn(wtURL, certHash)
+		}
+		if newConn == nil || err != nil {
+			wsConn, wsErr := tryWebSocket(config)
+			if wsErr != nil {
+				fmt.Println("bytewire: reconnect failed:", wsErr)
+				delay = min(delay*2, maxDelay)
+				continue
+			}
+			newConn = wsConn
 		}
 
-		if !openIntentStream(wt) {
-			fmt.Println("bytewire: reconnect intent stream failed")
-			delay = min(delay*2, maxDelay)
-			continue
-		}
-
-		// Success
+		conn = newConn
 		fmt.Println("bytewire: reconnected")
 		hideOverlay()
-		go readIncomingStreamsWithReconnect(wt)
+
+		conn.onMessage(func(data []byte) {
+			applyOpcodes(data)
+		})
+		conn.onClose(func() {
+			fmt.Println("bytewire: connection lost, starting reconnect")
+			reconnect()
+		})
 		return
 	}
 
-	// Exhausted retries
 	showOverlay("Connection lost. Please reload the page.")
 	fmt.Println("bytewire: reconnect failed after 30s")
 }
@@ -279,84 +269,7 @@ func sleep(ms int) {
 	<-ch
 }
 
-// readIncomingStreams reads unidirectional streams from the server
-// and applies binary opcode patches to the DOM.
-func readIncomingStreams(wt js.Value) {
-	reader := wt.Get("incomingUnidirectionalStreams").Call("getReader")
-
-	var readNext js.Func
-	readNext = js.FuncOf(func(_ js.Value, _ []js.Value) any {
-		reader.Call("read").Call("then",
-			js.FuncOf(func(_ js.Value, args []js.Value) any {
-				result := args[0]
-				if result.Get("done").Bool() {
-					return nil
-				}
-				stream := result.Get("value")
-				go readStreamAndPatch(stream, readNext)
-				return nil
-			}),
-		).Call("catch",
-			js.FuncOf(func(_ js.Value, args []js.Value) any {
-				fmt.Println("bytewire: stream reader error:", args[0].Call("toString").String())
-				return nil
-			}),
-		)
-		return nil
-	})
-
-	readNext.Invoke()
-}
-
-// readStreamAndPatch fully reads a unidirectional stream and applies the opcodes.
-func readStreamAndPatch(stream js.Value, readNext js.Func) {
-	sr := stream.Call("getReader")
-	var chunks []js.Value
-
-	var readChunk js.Func
-	readChunk = js.FuncOf(func(_ js.Value, _ []js.Value) any {
-		sr.Call("read").Call("then",
-			js.FuncOf(func(_ js.Value, args []js.Value) any {
-				result := args[0]
-				if result.Get("done").Bool() {
-					// All chunks read — concatenate and patch
-					total := 0
-					for _, c := range chunks {
-						total += c.Get("byteLength").Int()
-					}
-					buf := js.Global().Get("Uint8Array").New(total)
-					offset := 0
-					for _, c := range chunks {
-						buf.Call("set", c, offset)
-						offset += c.Get("byteLength").Int()
-					}
-
-					data := make([]byte, total)
-					js.CopyBytesToGo(data, buf)
-					applyOpcodes(data)
-
-					// Read next stream
-					readNext.Invoke()
-					return nil
-				}
-				chunks = append(chunks, result.Get("value"))
-				readChunk.Invoke()
-				return nil
-			}),
-		).Call("catch",
-			js.FuncOf(func(_ js.Value, args []js.Value) any {
-				fmt.Println("bytewire: chunk read error:", args[0].Call("toString").String())
-				readNext.Invoke()
-				return nil
-			}),
-		)
-		return nil
-	})
-
-	readChunk.Invoke()
-}
-
-// sendIntent encodes and sends an OpClientIntent frame over the persistent bidi stream.
+// sendIntent encodes and sends an OpClientIntent frame over the active transport.
 func sendIntent(nodeID uint32, eventType byte, payload []byte) {
 	frameLen := 1 + 4 + 1 + len(payload)
 	frame := make([]byte, 4+frameLen)
@@ -369,15 +282,10 @@ func sendIntent(nodeID uint32, eventType byte, payload []byte) {
 	uint8Array := js.Global().Get("Uint8Array").New(len(frame))
 	js.CopyBytesToJS(uint8Array, frame)
 
-	intentWriter.Call("write", uint8Array).Call("catch",
-		js.FuncOf(func(_ js.Value, args []js.Value) any {
-			fmt.Println("bytewire: send intent failed:", args[0].Call("toString").String())
-			return nil
-		}),
-	)
+	conn.send(uint8Array)
 }
 
-// sendClientNav encodes and sends an OpClientNav frame over the persistent bidi stream.
+// sendClientNav encodes and sends an OpClientNav frame over the active transport.
 func sendClientNav(path string) {
 	frameLen := 1 + len(path)
 	frame := make([]byte, 4+frameLen)
@@ -388,12 +296,7 @@ func sendClientNav(path string) {
 	uint8Array := js.Global().Get("Uint8Array").New(len(frame))
 	js.CopyBytesToJS(uint8Array, frame)
 
-	intentWriter.Call("write", uint8Array).Call("catch",
-		js.FuncOf(func(_ js.Value, args []js.Value) any {
-			fmt.Println("bytewire: send nav failed:", args[0].Call("toString").String())
-			return nil
-		}),
-	)
+	conn.send(uint8Array)
 }
 
 // findBWNode walks up from el to find the nearest element with data-bw-id.

@@ -12,8 +12,11 @@ import (
 	"sync"
 
 	"github.com/bytewiredev/bytewire/pkg/devcert"
+	"github.com/bytewiredev/bytewire/pkg/metrics"
+	"github.com/bytewiredev/bytewire/pkg/ratelimit"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/webtransport-go"
+	"golang.org/x/net/websocket"
 )
 
 // Server is the Bytewire WebTransport server that accepts connections
@@ -30,9 +33,24 @@ type Server struct {
 	css       string
 	httpAddr  string
 
-	mu       sync.Mutex
+	mu       sync.RWMutex
 	sessions map[SessionID]*Session
 	wt       *webtransport.Server
+
+	// Rate limit config applied to each new session.
+	rlRate  float64
+	rlBurst int
+
+	// Connection pooling options.
+	poolEnabled bool
+	poolSize    int
+
+	// WebSocket fallback for browsers without WebTransport support.
+	wsFallback bool
+
+	// Metrics registry and default metric handles.
+	metricsRegistry *metrics.Registry
+	metrics         *metrics.Defaults
 }
 
 // ServerOption configures the Server.
@@ -65,6 +83,58 @@ func WithHTTPAddr(addr string) ServerOption {
 	return func(s *Server) { s.httpAddr = addr }
 }
 
+// WithRateLimit sets per-session intent rate limiting. Rate is the sustained
+// intents per second; burst is the maximum number of intents allowed in a
+// quick burst. A zero rate disables rate limiting.
+func WithRateLimit(rate float64, burst int) ServerOption {
+	return func(s *Server) {
+		s.rlRate = rate
+		s.rlBurst = burst
+	}
+}
+
+// WithConnectionPool enables connection pooling with session multiplexing.
+// The size parameter sets the maximum number of concurrent sessions allowed.
+// A size of 0 or less means unlimited.
+func WithConnectionPool(size int) ServerOption {
+	return func(s *Server) {
+		s.poolEnabled = true
+		s.poolSize = size
+	}
+}
+
+// WithWebSocketFallback enables a /bw-ws WebSocket endpoint as a fallback
+// transport for browsers that do not support WebTransport.
+func WithWebSocketFallback() ServerOption {
+	return func(s *Server) { s.wsFallback = true }
+}
+
+// WithMetrics attaches a metrics registry to the server. The default Bytewire
+// metrics are registered automatically and the /metrics HTTP endpoint is served
+// on the page server mux.
+func WithMetrics(r *metrics.Registry) ServerOption {
+	return func(s *Server) {
+		s.metricsRegistry = r
+		s.metrics = metrics.RegisterDefaults(r)
+	}
+}
+
+// Session returns the session with the given ID, or nil if not found.
+func (s *Server) Session(id SessionID) *Session {
+	s.mu.RLock()
+	sess := s.sessions[id]
+	s.mu.RUnlock()
+	return sess
+}
+
+// SessionCount returns the number of active sessions.
+func (s *Server) SessionCount() int {
+	s.mu.RLock()
+	n := len(s.sessions)
+	s.mu.RUnlock()
+	return n
+}
+
 // NewServer creates a Bytewire server listening on addr.
 // If tlsConfig is nil, ListenAndServe will auto-generate an ephemeral dev cert.
 func NewServer(addr string, tlsConfig *tls.Config, comp Component, opts ...ServerOption) *Server {
@@ -73,6 +143,8 @@ func NewServer(addr string, tlsConfig *tls.Config, comp Component, opts ...Serve
 		tlsConfig: tlsConfig,
 		component: comp,
 		logger:    slog.Default(),
+		rlRate:    30,
+		rlBurst:   60,
 		httpAddr:  ":8080",
 		sessions:  make(map[SessionID]*Session),
 	}
@@ -104,6 +176,10 @@ func (s *Server) Setup(mux *http.ServeMux) {
 		}
 		s.handleConnection(r.Context(), sess)
 	})
+
+	if s.wsFallback {
+		mux.Handle("/bw-ws", websocket.Handler(s.handleWebSocket))
+	}
 }
 
 // ServeUDP starts the WebTransport server on an existing UDP connection.
@@ -164,6 +240,12 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	if s.staticDir != "" {
 		httpMux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir(s.staticDir))))
 	}
+	if s.wsFallback {
+		httpMux.Handle("/bw-ws", websocket.Handler(s.handleWebSocket))
+	}
+	if s.metricsRegistry != nil {
+		httpMux.Handle("/metrics", s.metricsRegistry.Handler())
+	}
 
 	httpSrv := &http.Server{Addr: s.httpAddr, Handler: httpMux}
 	go func() {
@@ -181,20 +263,48 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	return s.Shutdown()
 }
 
+// newLimiter creates a rate limiter using the server's config.
+// Returns nil if rate limiting is disabled (rate <= 0).
+func (s *Server) newLimiter() *ratelimit.Limiter {
+	if s.rlRate <= 0 {
+		return nil
+	}
+	return ratelimit.New(s.rlRate, s.rlBurst)
+}
+
 // handleConnection manages a single WebTransport session.
 func (s *Server) handleConnection(ctx context.Context, wtSession *webtransport.Session) {
+	// Enforce pool size limit if connection pooling is enabled.
+	if s.poolEnabled && s.poolSize > 0 {
+		s.mu.RLock()
+		count := len(s.sessions)
+		s.mu.RUnlock()
+		if count >= s.poolSize {
+			s.logger.Warn("connection pool full, rejecting session", "poolSize", s.poolSize)
+			wtSession.CloseWithError(429, "connection pool full")
+			return
+		}
+	}
+
 	w := &wtWriter{session: wtSession}
-	sess := NewSession(ctx, w, s.logger)
+	sess := NewSession(ctx, w, s.logger, s.newLimiter(), s.metrics)
 
 	s.mu.Lock()
 	s.sessions[sess.ID] = sess
 	s.mu.Unlock()
 
+	if s.metrics != nil {
+		s.metrics.SessionsTotal.Inc()
+		s.metrics.SessionsActive.Inc()
+	}
 	s.logger.Info("session connected", "sessionID", sess.ID)
 
 	if err := sess.Mount(s.component); err != nil {
 		s.logger.Error("mount failed", "error", err)
 		sess.Close()
+		if s.metrics != nil {
+			s.metrics.SessionsActive.Dec()
+		}
 		return
 	}
 
@@ -205,6 +315,9 @@ func (s *Server) handleConnection(ctx context.Context, wtSession *webtransport.S
 			delete(s.sessions, sess.ID)
 			s.mu.Unlock()
 			sess.Close()
+			if s.metrics != nil {
+				s.metrics.SessionsActive.Dec()
+			}
 			s.logger.Info("session disconnected", "sessionID", sess.ID)
 		}()
 
@@ -276,6 +389,100 @@ func (w *wtWriter) Close() error {
 	return nil
 }
 
+// handleWebSocket handles a single WebSocket connection as a fallback transport.
+func (s *Server) handleWebSocket(conn *websocket.Conn) {
+	conn.PayloadType = websocket.BinaryFrame
+
+	// Enforce pool size limit if connection pooling is enabled.
+	if s.poolEnabled && s.poolSize > 0 {
+		s.mu.RLock()
+		count := len(s.sessions)
+		s.mu.RUnlock()
+		if count >= s.poolSize {
+			s.logger.Warn("connection pool full, rejecting WebSocket session", "poolSize", s.poolSize)
+			conn.Close()
+			return
+		}
+	}
+
+	w := &wsWriter{conn: conn}
+	sess := NewSession(context.Background(), w, s.logger, s.newLimiter(), s.metrics)
+
+	s.mu.Lock()
+	s.sessions[sess.ID] = sess
+	s.mu.Unlock()
+
+	if s.metrics != nil {
+		s.metrics.SessionsTotal.Inc()
+		s.metrics.SessionsActive.Inc()
+	}
+	s.logger.Info("WebSocket session connected", "sessionID", sess.ID)
+
+	if err := sess.Mount(s.component); err != nil {
+		s.logger.Error("mount failed", "error", err)
+		sess.Close()
+		if s.metrics != nil {
+			s.metrics.SessionsActive.Dec()
+		}
+		return
+	}
+
+	// Read length-prefixed frames from WebSocket messages.
+	defer func() {
+		s.mu.Lock()
+		delete(s.sessions, sess.ID)
+		s.mu.Unlock()
+		sess.Close()
+		if s.metrics != nil {
+			s.metrics.SessionsActive.Dec()
+		}
+		s.logger.Info("WebSocket session disconnected", "sessionID", sess.ID)
+	}()
+
+	s.readWSFrames(sess, conn)
+}
+
+// readWSFrames reads length-prefixed binary frames from a WebSocket connection.
+func (s *Server) readWSFrames(sess *Session, conn *websocket.Conn) {
+	lenBuf := make([]byte, 4)
+	for {
+		if _, err := io.ReadFull(conn, lenBuf); err != nil {
+			return
+		}
+		frameLen := int(binary.BigEndian.Uint32(lenBuf))
+		if frameLen <= 0 || frameLen > 65536 {
+			return
+		}
+
+		frame := make([]byte, 4+frameLen)
+		copy(frame, lenBuf)
+		if _, err := io.ReadFull(conn, frame[4:]); err != nil {
+			return
+		}
+
+		if err := sess.HandleIntent(frame); err != nil {
+			s.logger.Error("intent error", "error", err, "sessionID", sess.ID)
+		}
+	}
+}
+
+// wsWriter adapts a WebSocket connection to the Writer interface.
+type wsWriter struct {
+	conn *websocket.Conn
+	mu   sync.Mutex
+}
+
+func (w *wsWriter) WriteMessage(data []byte) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	_, err := w.conn.Write(data)
+	return err
+}
+
+func (w *wsWriter) Close() error {
+	return w.conn.Close()
+}
+
 // buildShellHTML returns the HTML page that bootstraps the WASM client.
 // It injects the cert hash and CSS so the WASM binary is portable.
 func buildShellHTML(certHashJS, css, wtAddr string) string {
@@ -295,7 +502,8 @@ button:active{opacity:0.8;transform:scale(0.97)}
   <script>
     window.__bw_config = {
       url: "https://localhost%s/bw",
-      certHash: new Uint8Array(%s)
+      certHash: new Uint8Array(%s),
+      wsURL: "ws://" + location.host + "/bw-ws"
     };
   </script>
   <script src="/static/wasm_exec.js"></script>
