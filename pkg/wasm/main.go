@@ -43,7 +43,6 @@ func Start() {
 	// Hydrate any SSR-rendered nodes before connecting.
 	hydrateExistingDOM()
 
-	root.Set("textContent", "Connecting…")
 	fmt.Println("bytewire: WASM client initialized")
 
 	// Expose window.__bytewire DevTools object
@@ -51,6 +50,12 @@ func Start() {
 
 	if !connect() {
 		return
+	}
+
+	// Send the current browser path so the server mounts the correct route.
+	path := js.Global().Get("location").Get("pathname").String()
+	if path != "" && path != "/" {
+		sendClientNav(path)
 	}
 
 	// Listen for browser back/forward navigation
