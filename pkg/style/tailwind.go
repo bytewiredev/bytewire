@@ -8,9 +8,11 @@ type Class string
 // Common layout classes
 const (
 	Flex       Class = "flex"
+	Flex1      Class = "flex-1"
 	FlexCol    Class = "flex-col"
 	FlexRow    Class = "flex-row"
 	FlexWrap   Class = "flex-wrap"
+	Grid       Class = "grid"
 	ItemsCenter Class = "items-center"
 	JustifyCenter Class = "justify-center"
 	JustifyBetween Class = "justify-between"
@@ -22,18 +24,19 @@ const (
 
 // Spacing
 const (
-	P1  Class = "p-1"
-	P2  Class = "p-2"
-	P4  Class = "p-4"
-	P8  Class = "p-8"
-	M1  Class = "m-1"
-	M2  Class = "m-2"
-	M4  Class = "m-4"
-	M8  Class = "m-8"
-	Mx2 Class = "mx-2"
-	My2 Class = "my-2"
-	Px4 Class = "px-4"
-	Py2 Class = "py-2"
+	P1     Class = "p-1"
+	P2     Class = "p-2"
+	P4     Class = "p-4"
+	P8     Class = "p-8"
+	M1     Class = "m-1"
+	M2     Class = "m-2"
+	M4     Class = "m-4"
+	M8     Class = "m-8"
+	Mx2    Class = "mx-2"
+	MxAuto Class = "mx-auto"
+	My2    Class = "my-2"
+	Px4    Class = "px-4"
+	Py2    Class = "py-2"
 )
 
 // Typography
@@ -92,6 +95,8 @@ const (
 	MaxWLg  Class = "max-w-lg"
 	MaxWXl  Class = "max-w-xl"
 	MaxW2Xl Class = "max-w-2xl"
+	MaxW3Xl Class = "max-w-3xl"
+	MaxW4Xl Class = "max-w-4xl"
 	MinW0   Class = "min-w-0"
 )
 
@@ -113,10 +118,11 @@ const (
 
 // Display & Overflow
 const (
-	Hidden   Class = "hidden"
-	Block    Class = "block"
-	Inline   Class = "inline-block"
-	Overflow Class = "overflow-auto"
+	Hidden    Class = "hidden"
+	Block     Class = "block"
+	Inline    Class = "inline-block"
+	Overflow  Class = "overflow-auto"
+	BoxBorder Class = "box-border"
 )
 
 // Cursor
@@ -169,6 +175,50 @@ const (
 // Animation
 const (
 	AnimateSpin Class = "animate-spin"
+)
+
+// Sidebar layout
+const (
+	W64          Class = "w-64"
+	MinHScreen   Class = "min-h-screen"
+	Shrink0      Class = "shrink-0"
+	OverflowYAuto Class = "overflow-y-auto"
+)
+
+// Grid
+const (
+	GridCols2 Class = "grid-cols-2"
+	GridCols3 Class = "grid-cols-3"
+	GridCols4 Class = "grid-cols-4"
+	ColSpan2  Class = "col-span-2"
+)
+
+// Additional colors for showcase
+const (
+	BgGray50   Class = "bg-gray-50"
+	BgGray900  Class = "bg-gray-900"
+	TextGray300 Class = "text-gray-300"
+	TextGray400 Class = "text-gray-400"
+)
+
+// Additional spacing
+const (
+	Px6  Class = "px-6"
+	Py8  Class = "py-8"
+	Mb6  Class = "mb-6"
+	Gap6 Class = "gap-6"
+)
+
+// Additional typography
+const (
+	TextXs       Class = "text-xs"
+	Uppercase    Class = "uppercase"
+	TrackingWide Class = "tracking-wide"
+)
+
+// Additional borders
+const (
+	BorderB Class = "border-b"
 )
 
 // Classes joins multiple type-safe classes into a single string.

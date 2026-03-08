@@ -8,25 +8,93 @@ import (
 	"syscall/js"
 )
 
+// Batch state for deferred DOM attachment. When processing a batch of opcodes,
+// new nodes whose parent is already in the live DOM are collected and attached
+// via DocumentFragment at the end, reducing live DOM mutations from O(n) to O(1)
+// per parent container.
+var (
+	batchDepth    int
+	batchExisting map[uint32]bool  // node IDs that existed before this batch
+	batchDeferred []deferredInsert // insertions to defer
+)
+
+type deferredInsert struct {
+	nodeID, parentID uint32
+}
+
 // applyOpcodes processes a binary opcode stream and applies DOM mutations.
 // Each opcode is wrapped in a 4-byte length-prefixed frame.
 func applyOpcodes(data []byte) {
+	batchDepth++
+	if batchDepth == 1 {
+		// Snapshot live nodes before this batch
+		batchExisting = make(map[uint32]bool, len(nodes))
+		for id := range nodes {
+			batchExisting[id] = true
+		}
+		batchDeferred = batchDeferred[:0]
+	}
+
 	pos := 0
 	for pos < len(data) {
 		// Read frame length prefix
 		if pos+4 > len(data) {
-			return
+			break
 		}
 		frameLen := int(binary.BigEndian.Uint32(data[pos : pos+4]))
 		pos += 4
 		if pos+frameLen > len(data) {
-			return
+			break
 		}
 		frame := data[pos : pos+frameLen]
 		pos += frameLen
 
 		applyFrame(frame)
 	}
+
+	batchDepth--
+	if batchDepth == 0 {
+		flushDeferredInserts()
+		updateDevToolsNodeCount()
+	}
+}
+
+// flushDeferredInserts attaches deferred nodes to their live parents using
+// DocumentFragment for batching, resulting in a single DOM mutation per parent.
+func flushDeferredInserts() {
+	if len(batchDeferred) == 0 {
+		return
+	}
+
+	type fragEntry struct {
+		parentID uint32
+		frag     js.Value
+	}
+	fragMap := make(map[uint32]int) // parentID -> index in frags
+	var frags []fragEntry
+
+	for _, d := range batchDeferred {
+		idx, ok := fragMap[d.parentID]
+		if !ok {
+			frag := document.Call("createDocumentFragment")
+			idx = len(frags)
+			frags = append(frags, fragEntry{d.parentID, frag})
+			fragMap[d.parentID] = idx
+		}
+		if node, ok := nodes[d.nodeID]; ok {
+			frags[idx].frag.Call("appendChild", node)
+		}
+	}
+
+	for _, fe := range frags {
+		if parent, ok := nodes[fe.parentID]; ok {
+			parent.Call("appendChild", fe.frag)
+		} else if fe.parentID == 0 {
+			root.Call("appendChild", fe.frag)
+		}
+	}
+
+	batchDeferred = batchDeferred[:0]
 }
 
 // applyFrame processes a single bounded opcode frame.
@@ -65,7 +133,7 @@ func applyFrame(data []byte) {
 		value := string(rest[sep+1:])
 
 		if node, ok := nodes[nodeID]; ok {
-			node.Call("setAttribute", key, value)
+			setAttrFast(node, key, value)
 		}
 
 	case 0x03: // OpRemoveAttr
@@ -176,23 +244,49 @@ func applyFrame(data []byte) {
 			v := string(data[p : p+vLen])
 			p += vLen
 
-			el.Call("setAttribute", k, v)
+			setAttrFast(el, k, v)
 		}
 
-		// Set data-bw-id so the WASM client can map DOM events back to Bytewire node IDs.
+		// Set __bwId as a JS property (faster than setAttribute + avoids string formatting).
 		if tag != "#text" {
-			el.Call("setAttribute", "data-bw-id", fmt.Sprintf("%d", nodeID))
+			el.Set("__bwId", nodeID)
 		}
 
 		nodes[nodeID] = el
 
-		if parent, ok := nodes[parentID]; ok {
+		// Defer attachment if parent is in the live DOM and we're appending
+		// (no sibling). This lets us batch all children into a DocumentFragment
+		// and do a single DOM mutation per parent at flush time.
+		if siblingID == 0 && batchDepth > 0 && batchExisting[parentID] {
+			batchDeferred = append(batchDeferred, deferredInsert{nodeID, parentID})
+		} else if parent, ok := nodes[parentID]; ok {
 			if siblingID != 0 {
 				if sib, ok := nodes[siblingID]; ok {
 					parent.Call("insertBefore", el, sib)
 					return
 				}
 			}
+			parent.Call("appendChild", el)
+		} else if parentID == 0 {
+			root.Call("appendChild", el)
+		}
+
+	case 0x0E: // OpInsertText — combined create text node + set content
+		if p+8 > len(data) {
+			return
+		}
+		nodeID := binary.BigEndian.Uint32(data[p : p+4])
+		p += 4
+		parentID := binary.BigEndian.Uint32(data[p : p+4])
+		p += 4
+		text := string(data[p:])
+
+		el := document.Call("createTextNode", text)
+		nodes[nodeID] = el
+
+		if batchDepth > 0 && batchExisting[parentID] {
+			batchDeferred = append(batchDeferred, deferredInsert{nodeID, parentID})
+		} else if parent, ok := nodes[parentID]; ok {
 			parent.Call("appendChild", el)
 		} else if parentID == 0 {
 			root.Call("appendChild", el)
@@ -292,12 +386,137 @@ func applyFrame(data []byte) {
 	case 0x0D: // OpAuthResult
 		handleAuthResult(data)
 
+	case 0x0F: // OpInsertHTML
+		if p+4 > len(data) {
+			return
+		}
+		parentID := binary.BigEndian.Uint32(data[p : p+4])
+		p += 4
+		htmlStr := string(data[p:])
+
+		// Resolve parent element
+		parent := root
+		if pp, ok := nodes[parentID]; ok {
+			parent = pp
+		}
+
+		// Call the pure-JS helper — does template creation, innerHTML parsing,
+		// querySelectorAll walk, __bwId setting, and appendChild entirely in JS.
+		// Returns a Uint8Array of packed [uint32 id, int32 tid] pairs.
+		idBuf := js.Global().Call("__bwProcessHTML", parent, htmlStr)
+
+		// Bulk-copy the ID buffer to Go (1 interop call instead of ~36000).
+		bufLen := idBuf.Get("length").Int()
+		if bufLen > 0 {
+			idBytes := make([]byte, bufLen)
+			js.CopyBytesToGo(idBytes, idBuf)
+
+			els := js.Global().Get("__bwHTMLEls")
+			count := bufLen / 8
+			for i := 0; i < count; i++ {
+				id := binary.LittleEndian.Uint32(idBytes[i*8:])
+				tidRaw := int32(binary.LittleEndian.Uint32(idBytes[i*8+4:]))
+				el := els.Call("item", i)
+				nodes[id] = el
+				if tidRaw >= 0 {
+					nodes[uint32(tidRaw)] = el
+				}
+				// Trigger initial chart render for canvas elements.
+				chartAttr := el.Call("getAttribute", "data-bw-chart")
+				if !chartAttr.IsNull() && !chartAttr.IsUndefined() {
+					renderChart(el)
+				}
+			}
+		}
+
+	case 0x15: // OpSwapNodes
+		if p+8 > len(data) {
+			return
+		}
+		nodeA := binary.BigEndian.Uint32(data[p : p+4])
+		p += 4
+		nodeB := binary.BigEndian.Uint32(data[p : p+4])
+
+		elA, okA := nodes[nodeA]
+		elB, okB := nodes[nodeB]
+		if !okA || !okB {
+			return
+		}
+
+		// DOM swap: save A's next sibling, move A before B, move B to A's old position.
+		parentA := elA.Get("parentNode")
+		nextA := elA.Get("nextSibling")
+
+		// If B is directly after A, insertBefore(B, A) is sufficient.
+		if nextA.Equal(elB) {
+			parentA.Call("insertBefore", elB, elA)
+		} else {
+			// General case: move A before B, then move B to A's old spot.
+			parentB := elB.Get("parentNode")
+			parentB.Call("insertBefore", elA, elB)
+			if nextA.IsNull() || nextA.IsUndefined() {
+				parentA.Call("appendChild", elB)
+			} else {
+				parentA.Call("insertBefore", elB, nextA)
+			}
+		}
+
+	case 0x16: // OpBatchText
+		if p+2 > len(data) {
+			return
+		}
+		count := int(binary.BigEndian.Uint16(data[p : p+2]))
+		p += 2
+		for range count {
+			if p+6 > len(data) {
+				return
+			}
+			nodeID := binary.BigEndian.Uint32(data[p : p+4])
+			p += 4
+			textLen := int(binary.BigEndian.Uint16(data[p : p+2]))
+			p += 2
+			if p+textLen > len(data) {
+				return
+			}
+			text := string(data[p : p+textLen])
+			p += textLen
+			if node, ok := nodes[nodeID]; ok {
+				node.Set("textContent", text)
+			}
+		}
+
+	case 0x14: // OpClearChildren
+		if p+4 > len(data) {
+			return
+		}
+		parentID := binary.BigEndian.Uint32(data[p : p+4])
+
+		var parent js.Value
+		if pp, ok := nodes[parentID]; ok {
+			parent = pp
+		} else {
+			parent = root
+		}
+
+		// Collect all descendant __bwId values via JS helper, then
+		// bulk-transfer as a Uint8Array (one CopyBytesToGo call).
+		idBuf := js.Global().Call("__bwCollectIds", parent)
+		bufLen := idBuf.Get("length").Int()
+		if bufLen > 0 {
+			idBytes := make([]byte, bufLen)
+			js.CopyBytesToGo(idBytes, idBuf)
+			for i := 0; i < bufLen; i += 4 {
+				id := binary.LittleEndian.Uint32(idBytes[i:])
+				delete(nodes, id)
+			}
+		}
+
+		// Remove all children in one DOM operation.
+		parent.Set("textContent", "")
+
 	default:
 		fmt.Printf("bytewire: unknown opcode 0x%02x\n", op)
 	}
-
-	// Update DevTools node count after any mutation
-	updateDevToolsNodeCount()
 }
 
 func handleAuthResult(data []byte) {
@@ -313,6 +532,33 @@ func handleAuthResult(data []byte) {
 		fmt.Printf("bytewire: authenticated (token=%s)\n", token)
 	} else {
 		fmt.Println("bytewire: authentication failed")
+	}
+}
+
+// parseDataBwId parses a numeric string to uint32 without allocations.
+func parseDataBwId(s string) uint32 {
+	var id uint32
+	for _, c := range s {
+		if c >= '0' && c <= '9' {
+			id = id*10 + uint32(c-'0')
+		}
+	}
+	return id
+}
+
+// setAttrFast uses direct property assignment for common attributes (id, className)
+// which is faster than setAttribute because it skips DOM attribute mutation overhead.
+func setAttrFast(el js.Value, k, v string) {
+	switch k {
+	case "id":
+		el.Set("id", v)
+	case "class":
+		el.Set("className", v)
+	case "data-bw-chart-data":
+		el.Call("setAttribute", k, v)
+		renderChart(el)
+	default:
+		el.Call("setAttribute", k, v)
 	}
 }
 
@@ -371,8 +617,8 @@ func showErrorOverlay(msg string) {
 }
 
 // hydrateExistingDOM scans the DOM for elements with data-bw-id attributes
-// (from SSR) and pre-populates the nodes map. This allows the WASM client
-// to reuse existing DOM nodes instead of creating duplicates.
+// (from SSR) and pre-populates the nodes map. It also sets the __bwId JS
+// property so event delegation uses the fast property path.
 func hydrateExistingDOM() {
 	nodeList := document.Call("querySelectorAll", "[data-bw-id]")
 	length := nodeList.Get("length").Int()
@@ -395,6 +641,7 @@ func hydrateExistingDOM() {
 		}
 		if id > 0 {
 			nodes[id] = el
+			el.Set("__bwId", id) // fast property for event delegation
 		}
 	}
 
@@ -411,19 +658,9 @@ func cleanupDescendants(el js.Value) {
 	for i := range length {
 		child := children.Index(i)
 		cleanupDescendants(child)
-		bwID := child.Call("getAttribute", "data-bw-id")
-		if !bwID.IsNull() && !bwID.IsUndefined() {
-			idStr := bwID.String()
-			// Parse the ID and remove from nodes map
-			var id uint32
-			for _, c := range idStr {
-				if c >= '0' && c <= '9' {
-					id = id*10 + uint32(c-'0')
-				}
-			}
-			if id > 0 {
-				delete(nodes, id)
-			}
+		bwID := child.Get("__bwId")
+		if !bwID.IsUndefined() && !bwID.IsNull() {
+			delete(nodes, uint32(bwID.Int()))
 		}
 	}
 }

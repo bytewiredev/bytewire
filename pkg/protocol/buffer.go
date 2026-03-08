@@ -14,7 +14,7 @@ type Buffer struct {
 
 var bufferPool = sync.Pool{
 	New: func() any {
-		return &Buffer{buf: make([]byte, 0, 256)}
+		return &Buffer{buf: make([]byte, 0, 4096)}
 	},
 }
 
@@ -131,6 +131,16 @@ func (b *Buffer) EncodeInsertNode(nodeID, parentID, siblingID uint32, tag string
 		b.buf = binary.BigEndian.AppendUint16(b.buf, uint16(len(vb)))
 		b.writeBytes(vb)
 	}
+	b.endFrame(off)
+}
+
+// EncodeInsertText creates a text node and sets its content in one op.
+func (b *Buffer) EncodeInsertText(nodeID, parentID uint32, text string) {
+	off := b.beginFrame()
+	b.writeByte(OpInsertText)
+	b.writeUint32(nodeID)
+	b.writeUint32(parentID)
+	b.writeBytes([]byte(text))
 	b.endFrame(off)
 }
 
@@ -270,6 +280,55 @@ func (b *Buffer) EncodeAuthResult(success bool, token string) {
 		b.writeByte(0)
 	}
 	b.writeBytes([]byte(token))
+	b.endFrame(off)
+}
+
+// EncodeInsertHTML writes an OpInsertHTML instruction.
+// The HTML string must contain data-bw-id attributes on tracked elements.
+func (b *Buffer) EncodeInsertHTML(parentID uint32, html string) {
+	off := b.beginFrame()
+	b.writeByte(OpInsertHTML)
+	b.writeUint32(parentID)
+	b.writeBytes([]byte(html))
+	b.endFrame(off)
+}
+
+// EncodeClearChildren writes an OpClearChildren instruction.
+func (b *Buffer) EncodeClearChildren(parentID uint32) {
+	off := b.beginFrame()
+	b.writeByte(OpClearChildren)
+	b.writeUint32(parentID)
+	b.endFrame(off)
+}
+
+// EncodeSwapNodes writes an OpSwapNodes instruction.
+// Format: [0x15][4B nodeA][4B nodeB]
+func (b *Buffer) EncodeSwapNodes(nodeA, nodeB uint32) {
+	off := b.beginFrame()
+	b.writeByte(OpSwapNodes)
+	b.writeUint32(nodeA)
+	b.writeUint32(nodeB)
+	b.endFrame(off)
+}
+
+// TextUpdate pairs a node ID with its new text content for batch updates.
+type TextUpdate struct {
+	NodeID uint32
+	Text   string
+}
+
+// EncodeBatchText writes an OpBatchText instruction containing multiple text updates.
+// Format: [0x16][2B count][4B nodeID | 2B textLen | text bytes]...
+func (b *Buffer) EncodeBatchText(updates []TextUpdate) {
+	off := b.beginFrame()
+	b.writeByte(OpBatchText)
+	b.buf = binary.BigEndian.AppendUint16(b.buf, uint16(len(updates)))
+	for _, u := range updates {
+		b.writeUint32(u.NodeID)
+		textBytes := []byte(u.Text)
+		b.buf = binary.BigEndian.AppendUint16(b.buf, uint16(len(textBytes)))
+		b.writeBytes(textBytes)
+	}
 	b.endFrame(off)
 }
 

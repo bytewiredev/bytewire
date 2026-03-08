@@ -132,6 +132,85 @@ func Computed[T any, U comparable](source Observable[T], derive func(T) U) *Sign
 	return computed
 }
 
+// BoxSignal is a reactive container for non-comparable values (e.g., structs
+// containing slices). Unlike Signal[T], it always notifies on Set since the
+// value cannot be compared with ==.
+type BoxSignal[T any] struct {
+	id        SignalID
+	mu        sync.RWMutex
+	value     T
+	observers []func(T)
+}
+
+// NewBoxSignal creates a BoxSignal with an initial value.
+func NewBoxSignal[T any](initial T) *BoxSignal[T] {
+	return &BoxSignal[T]{
+		id:    nextSignalID(),
+		value: initial,
+	}
+}
+
+// Get returns the current value.
+func (s *BoxSignal[T]) Get() T {
+	s.mu.RLock()
+	v := s.value
+	s.mu.RUnlock()
+	return v
+}
+
+// Set updates the value and notifies all observers.
+func (s *BoxSignal[T]) Set(v T) {
+	s.mu.Lock()
+	s.value = v
+	observers := make([]func(T), len(s.observers))
+	copy(observers, s.observers)
+	s.mu.Unlock()
+
+	for _, fn := range observers {
+		if fn != nil {
+			fn(v)
+		}
+	}
+}
+
+// Update applies a transform function to the current value.
+func (s *BoxSignal[T]) Update(fn func(T) T) {
+	s.mu.Lock()
+	s.value = fn(s.value)
+	v := s.value
+	observers := make([]func(T), len(s.observers))
+	copy(observers, s.observers)
+	s.mu.Unlock()
+
+	for _, fn := range observers {
+		if fn != nil {
+			fn(v)
+		}
+	}
+}
+
+// ID returns the signal's unique identifier.
+func (s *BoxSignal[T]) ID() SignalID {
+	return s.id
+}
+
+// Observe registers a callback invoked whenever the value changes.
+// Returns an unsubscribe function.
+func (s *BoxSignal[T]) Observe(fn func(T)) func() {
+	s.mu.Lock()
+	s.observers = append(s.observers, fn)
+	idx := len(s.observers) - 1
+	s.mu.Unlock()
+
+	return func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if idx < len(s.observers) {
+			s.observers[idx] = nil
+		}
+	}
+}
+
 // ListSignal is a reactive container for slices. Unlike Signal[T], it does
 // not require comparable elements and always notifies on Set (since slices
 // cannot be compared with ==).

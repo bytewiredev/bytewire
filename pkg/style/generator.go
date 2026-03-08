@@ -8,9 +8,11 @@ import (
 // cssRules maps class names to their CSS definitions.
 var cssRules = map[Class]string{
 	Flex:           "display:flex",
+	Flex1:          "flex:1 1 0%",
 	FlexCol:        "flex-direction:column",
 	FlexRow:        "flex-direction:row",
 	FlexWrap:       "flex-wrap:wrap",
+	Grid:           "display:grid",
 	ItemsCenter:    "align-items:center",
 	JustifyCenter:  "justify-content:center",
 	JustifyBetween: "justify-content:space-between",
@@ -27,6 +29,7 @@ var cssRules = map[Class]string{
 	M4:             "margin:1rem",
 	M8:             "margin:2rem",
 	Mx2:            "margin-left:0.5rem;margin-right:0.5rem",
+	MxAuto:         "margin-left:auto;margin-right:auto",
 	My2:            "margin-top:0.5rem;margin-bottom:0.5rem",
 	Px4:            "padding-left:1rem;padding-right:1rem",
 	Py2:            "padding-top:0.5rem;padding-bottom:0.5rem",
@@ -66,6 +69,8 @@ var cssRules = map[Class]string{
 	MaxWLg:         "max-width:32rem",
 	MaxWXl:         "max-width:36rem",
 	MaxW2Xl:        "max-width:42rem",
+	MaxW3Xl:        "max-width:48rem",
+	MaxW4Xl:        "max-width:56rem",
 	W4:             "width:1rem",
 	H4:             "height:1rem",
 	W6:             "width:1.5rem",
@@ -85,6 +90,7 @@ var cssRules = map[Class]string{
 	Block:          "display:block",
 	Inline:         "display:inline-block",
 	Overflow:       "overflow:auto",
+	BoxBorder:      "box-sizing:border-box",
 	CursorPointer:  "cursor:pointer",
 	BgBlack:        "background-color:#000000",
 	BgYellow500:    "background-color:#eab308",
@@ -117,6 +123,38 @@ var cssRules = map[Class]string{
 	BorderYellow500: "border-color:#eab308",
 	BorderBlue500:  "border-color:#3b82f6",
 	AnimateSpin:    "animation:spin 1s linear infinite",
+
+	// Sidebar layout
+	W64:           "width:16rem",
+	MinHScreen:    "min-height:100vh",
+	Shrink0:       "flex-shrink:0",
+	OverflowYAuto: "overflow-y:auto",
+
+	// Grid
+	GridCols2: "grid-template-columns:repeat(2,minmax(0,1fr))",
+	GridCols3: "grid-template-columns:repeat(3,minmax(0,1fr))",
+	GridCols4: "grid-template-columns:repeat(4,minmax(0,1fr))",
+	ColSpan2:  "grid-column:span 2/span 2",
+
+	// Additional colors
+	BgGray50:    "background-color:#f9fafb",
+	BgGray900:   "background-color:#111827",
+	TextGray300: "color:#d1d5db",
+	TextGray400: "color:#9ca3af",
+
+	// Additional spacing
+	Px6:  "padding-left:1.5rem;padding-right:1.5rem",
+	Py8:  "padding-top:2rem;padding-bottom:2rem",
+	Mb6:  "margin-bottom:1.5rem",
+	Gap6: "gap:1.5rem",
+
+	// Additional typography
+	TextXs:       "font-size:0.75rem;line-height:1rem",
+	Uppercase:    "text-transform:uppercase",
+	TrackingWide: "letter-spacing:0.05em",
+
+	// Additional borders
+	BorderB: "border-bottom-width:1px",
 }
 
 // Generate produces a minimal CSS stylesheet containing only the classes used.
@@ -124,6 +162,7 @@ var cssRules = map[Class]string{
 func Generate(used []Class) string {
 	var sb strings.Builder
 	sb.WriteString("/* Bytewire Generated Stylesheet - Zero Dead Code */\n")
+	sb.WriteString("*,*::before,*::after{box-sizing:border-box}\n")
 
 	for _, cls := range used {
 		if rule, ok := cssRules[cls]; ok {
