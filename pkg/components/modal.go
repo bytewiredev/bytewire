@@ -9,7 +9,8 @@ import (
 // When visible is true, a backdrop overlay and centered dialog are shown.
 func Modal(title string, visible *dom.Signal[bool], children ...*dom.Node) *dom.Node {
 	closeBtn := dom.Button(
-		dom.Class(style.Classes(style.TextGray500, style.TextLg, style.FontBold, style.CursorPointer)),
+		dom.Class(style.Classes(style.W8, style.H8, style.Flex, style.ItemsCenter, style.JustifyCenter,
+			style.RoundedFull, style.BgGray100, style.TextGray500, style.CursorPointer, style.TextLg, style.FontBold)),
 		dom.Children(dom.Text("\u00d7")),
 		dom.OnClick(func(_ []byte) {
 			visible.Set(false)
@@ -32,7 +33,7 @@ func Modal(title string, visible *dom.Signal[bool], children ...*dom.Node) *dom.
 	dialog := dom.Div(
 		dom.Class(style.Classes(
 			style.BgWhite, style.RoundedLg, style.ShadowLg, style.P6,
-			style.MaxWLg, style.WFull, style.Relative,
+			style.MaxWLg, style.WFull, style.MinW0, style.Relative,
 		)),
 		dom.Children(header, body),
 	)
@@ -41,7 +42,7 @@ func Modal(title string, visible *dom.Signal[bool], children ...*dom.Node) *dom.
 		dom.Class(style.Classes(
 			style.Fixed, style.Inset0, style.Z50,
 			style.Flex, style.ItemsCenter, style.JustifyCenter,
-			style.BgOpacity50,
+			style.BgOpacity50, style.P4,
 		)),
 		dom.Children(dialog),
 		dom.OnClick(func(_ []byte) {

@@ -296,7 +296,13 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	httpSrv := &http.Server{Addr: s.httpAddr, Handler: httpMux}
 	go func() {
 		s.logger.Info("HTTP page server starting", "addr", "http://localhost"+s.httpAddr)
-		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		ln, err := net.Listen("tcp", s.httpAddr)
+		if err != nil {
+			s.logger.Error("HTTP listen error", "error", err)
+			return
+		}
+		// Wrap listener to set TCP_NODELAY on every accepted connection.
+		if err := httpSrv.Serve(tcpNoDelayListener{ln}); err != nil && err != http.ErrServerClosed {
 			s.logger.Error("HTTP server error", "error", err)
 		}
 	}()
@@ -584,6 +590,23 @@ func (w *wsWriter) WriteMessage(data []byte) error {
 
 func (w *wsWriter) Close() error {
 	return w.conn.Close()
+}
+
+// tcpNoDelayListener wraps a net.Listener and sets TCP_NODELAY on every
+// accepted connection, eliminating Nagle's algorithm buffering delay.
+type tcpNoDelayListener struct {
+	net.Listener
+}
+
+func (l tcpNoDelayListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return c, err
+	}
+	if tc, ok := c.(*net.TCPConn); ok {
+		tc.SetNoDelay(true)
+	}
+	return c, nil
 }
 
 // buildShellHTML returns the HTML page that bootstraps the WASM client.

@@ -72,8 +72,7 @@ func emitInsert(buf *protocol.Buffer, n *Node) {
 		if n.Parent != nil {
 			parentID = uint32(n.Parent.ID)
 		}
-		buf.EncodeInsertNode(uint32(n.ID), parentID, 0, "#text", nil)
-		buf.EncodeUpdateText(uint32(n.ID), n.Text)
+		buf.EncodeInsertText(uint32(n.ID), parentID, n.Text)
 		return
 	}
 

@@ -58,6 +58,32 @@ const (
 	// OpAuthResult sends the authentication result to the client.
 	// Format: [0x0D][1B success (0/1)][token bytes]
 	OpAuthResult byte = 0x0D
+
+	// OpInsertText creates a text node and sets its content in one operation.
+	// Combines OpInsertNode(#text) + OpUpdateText for better throughput.
+	// Format: [0x0E][4B NodeID][4B ParentID][UTF-8 text bytes]
+	OpInsertText byte = 0x0E
+
+	// OpInsertHTML inserts a subtree via pre-rendered HTML.
+	// The client uses innerHTML for O(1) DOM creation, then walks
+	// data-bw-id attributes to populate the node registry.
+	// Format: [0x0F][4B ParentID][UTF-8 HTML bytes]
+	OpInsertHTML byte = 0x0F
+
+	// OpClearChildren removes all children of a node in one operation.
+	// Much faster than individual OpRemoveNode for bulk removal (e.g., clearing a list).
+	// Format: [0x14][4B ParentID]
+	OpClearChildren byte = 0x14
+
+	// OpSwapNodes swaps two DOM nodes in one operation.
+	// More efficient than two OpInsertNode moves for simple 2-element swaps.
+	// Format: [0x15][4B nodeA][4B nodeB]
+	OpSwapNodes byte = 0x15
+
+	// OpBatchText updates multiple text nodes in a single frame.
+	// Eliminates per-frame overhead when many signal-bound text nodes change at once.
+	// Format: [0x16][2B count][4B nodeID | 2B textLen | text bytes]...
+	OpBatchText byte = 0x16
 )
 
 // Client -> Server opcodes (0x10 - 0x1F)

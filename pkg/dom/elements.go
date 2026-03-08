@@ -1,6 +1,10 @@
 package dom
 
-import "github.com/bytewiredev/bytewire/pkg/protocol"
+import (
+	"encoding/json"
+
+	"github.com/bytewiredev/bytewire/pkg/protocol"
+)
 
 // Option configures a Node during creation.
 type Option func(*Node)
@@ -132,6 +136,9 @@ func AttrF[T comparable](s *Signal[T], key string, format func(T) string) Option
 		n.Attrs[key] = format(s.Get())
 		s.Observe(func(v T) {
 			val := format(v)
+			if n.Attrs[key] == val {
+				return // No change — skip dirty marking
+			}
 			n.Attrs[key] = val
 			if n.DirtyAttrs == nil {
 				n.DirtyAttrs = make(map[string]string)
@@ -153,6 +160,9 @@ func StyleF[T comparable](s *Signal[T], property string, format func(T) string) 
 		n.Styles[property] = format(s.Get())
 		s.Observe(func(v T) {
 			val := format(v)
+			if n.Styles[property] == val {
+				return // No change — skip dirty marking
+			}
 			n.Styles[property] = val
 			if n.DirtyStyles == nil {
 				n.DirtyStyles = make(map[string]string)
@@ -170,6 +180,33 @@ func Link(href string) Option {
 	return func(n *Node) {
 		n.Attrs["href"] = href
 		n.Attrs["data-bw-link"] = ""
+	}
+}
+
+// Canvas creates a <canvas> element.
+func Canvas(opts ...Option) *Node { return element("canvas", opts...) }
+
+// AttrJSON binds a JSON-serialized attribute to an Observable signal.
+// When the signal changes, the value is marshaled to JSON and set as the
+// attribute value. This is used by chart components to push data updates
+// via the existing OpSetAttr mechanism.
+func AttrJSON[T any](s Observable[T], key string) Option {
+	return func(n *Node) {
+		data, _ := json.Marshal(s.Get())
+		n.Attrs[key] = string(data)
+		s.Observe(func(v T) {
+			newData, _ := json.Marshal(v)
+			val := string(newData)
+			if n.Attrs[key] == val {
+				return
+			}
+			n.Attrs[key] = val
+			if n.DirtyAttrs == nil {
+				n.DirtyAttrs = make(map[string]string)
+			}
+			n.DirtyAttrs[key] = val
+			n.Dirty = true
+		})
 	}
 }
 

@@ -8,7 +8,6 @@ package wasm
 import (
 	"encoding/binary"
 	"fmt"
-	"strconv"
 	"sync/atomic"
 	"syscall/js"
 )
@@ -29,6 +28,45 @@ func init() {
 	document = js.Global().Get("document")
 	nodes = make(map[uint32]js.Value)
 	overlay = js.Undefined()
+
+	// Register a pure-JS helper for OpInsertHTML that does the heavy
+	// querySelectorAll loop entirely in JavaScript, avoiding thousands
+	// of WASM↔JS interop calls per bulk insert.
+	js.Global().Call("eval", `
+window.__bwProcessHTML = function(parentEl, html) {
+	var tmpl = document.createElement('template');
+	tmpl.innerHTML = html;
+	var content = tmpl.content;
+	var els = content.querySelectorAll('[data-bw-id]');
+	var n = els.length;
+	var buf = new ArrayBuffer(n * 8);
+	var dv = new DataView(buf);
+	for (var i = 0; i < n; i++) {
+		var el = els[i];
+		var id = el.dataset.bwId | 0;
+		el.__bwId = id;
+		dv.setUint32(i * 8, id, true);
+		var tid = el.dataset.bwTid;
+		dv.setInt32(i * 8 + 4, tid ? (tid | 0) : -1, true);
+	}
+	parentEl.appendChild(content);
+	window.__bwHTMLEls = els;
+	return new Uint8Array(buf);
+};
+window.__bwCollectIds = function(el) {
+	var children = el.querySelectorAll('*');
+	var ids = [];
+	for (var i = 0; i < children.length; i++) {
+		var bwId = children[i].__bwId;
+		if (bwId !== undefined && bwId !== null) ids.push(bwId);
+	}
+	var buf = new ArrayBuffer(ids.length * 4);
+	var dv = new DataView(buf);
+	for (var i = 0; i < ids.length; i++) {
+		dv.setUint32(i * 4, ids[i], true);
+	}
+	return new Uint8Array(buf);
+};`)
 }
 
 // Start initializes the Bytewire WASM client: connects to the server,
@@ -323,16 +361,14 @@ func sendClientNav(path string) {
 	conn.send(uint8Array)
 }
 
-// findBWNode walks up from el to find the nearest element with data-bw-id.
+// findBWNode walks up from el to find the nearest element with a __bwId property
+// (set by the WASM client) or a data-bw-id attribute (set by SSR).
 func findBWNode(el js.Value) (uint32, bool) {
 	body := document.Get("body")
 	for !el.IsNull() && !el.IsUndefined() && !el.Equal(body) {
-		attr := el.Call("getAttribute", "data-bw-id")
-		if !attr.IsNull() && !attr.IsUndefined() {
-			id, err := strconv.Atoi(attr.String())
-			if err == nil {
-				return uint32(id), true
-			}
+		bwId := el.Get("__bwId")
+		if !bwId.IsUndefined() && !bwId.IsNull() {
+			return uint32(bwId.Int()), true
 		}
 		el = el.Get("parentElement")
 	}
@@ -371,6 +407,30 @@ func setupEventDelegation() {
 		target := e.Get("target")
 		if nodeID, ok := findBWNode(target); ok {
 			sendIntent(nodeID, 0x03, nil) // EventSubmit
+		}
+		return nil
+	}))
+
+	// Mouseover — hover prefetch for SPA links
+	var lastHoverID uint32
+	root.Call("addEventListener", "mouseover", js.FuncOf(func(_ js.Value, args []js.Value) any {
+		target := args[0].Get("target")
+		// Walk up to find nearest <a> with data-bw-link
+		body := document.Get("body")
+		el := target
+		for !el.IsNull() && !el.IsUndefined() && !el.Equal(body) {
+			tagName := el.Get("tagName")
+			if !tagName.IsUndefined() && tagName.String() == "A" {
+				bwLink := el.Call("getAttribute", "data-bw-link")
+				if !bwLink.IsNull() && !bwLink.IsUndefined() {
+					if nodeID, ok := findBWNode(el); ok && nodeID != lastHoverID {
+						lastHoverID = nodeID
+						sendIntent(nodeID, 0x08, nil) // EventMouseEnter
+					}
+					return nil
+				}
+			}
+			el = el.Get("parentElement")
 		}
 		return nil
 	}))
